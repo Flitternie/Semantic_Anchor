@@ -12,16 +12,7 @@ from utils.misc import init_vocab
 from transformers import *
 from utils.data import load_general, load_kqapro
 
-def get_program_seq(program):
-    seq = []
-    for item in program:
-        func = item['function']
-        inputs = item['inputs']
-        seq.append(func + '(' + '<c>'.join(inputs) + ')')
-    seq = '<b>'.join(seq)
-    return seq
-
-def encode_dataset(mode, dataset, vocab, tokenizer):
+def encode_dataset(dataset, vocab, tokenizer):
     inputs = []
     targets = []
     choices = []
@@ -29,7 +20,7 @@ def encode_dataset(mode, dataset, vocab, tokenizer):
     
     for item in tqdm(dataset):
         inputs.append(item['input'])
-        targets.append(item['output'])
+        targets.append(item['target'])
         if 'choices' in item.keys():
             choices.append([vocab['answer_token_to_idx'][w] for w in item['choices']])
         if 'answers' in item.keys():
@@ -61,7 +52,10 @@ def main():
     args = parser.parse_args()
     set_seed(666)
 
-    train_set, val_set, test_set, vocab = load_general(args)
+    if 'kqapro' in args.input_dir:
+        train_set, val_set, test_set, vocab = load_kqapro(args)
+    else:
+        train_set, val_set, test_set, vocab = load_general(args)
 
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir, exist_ok=True)
@@ -71,11 +65,11 @@ def main():
     with open(fn, 'w') as f:
         json.dump(vocab, f, indent=2)
     
-    tokenizer = BartTokenizer.from_pretrained(args.model_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     
     for name, dataset in zip(('train', 'val', 'test'), (train_set, val_set, test_set)):
         print('Encode {} set'.format(name))
-        outputs = encode_dataset(args.mode, dataset, vocab, tokenizer)
+        outputs = encode_dataset(dataset, vocab, tokenizer)
         assert len(outputs) == 5
         with open(os.path.join(args.output_dir, '{}.pt'.format(name)), 'wb') as f:
             for o in outputs:

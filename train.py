@@ -12,7 +12,7 @@ from datetime import date
 from utils.misc import MetricLogger, seed_everything, ProgressBar
 from utils.load_kb import DataForSPARQL
 from utils.data import DataLoader, DistributedDataLoader, prepare_dataset
-from transformers import BartConfig, BartForConditionalGeneration, BartTokenizer
+from transformers import AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer
 
 import torch.optim as optim
 import logging
@@ -51,7 +51,7 @@ def train(args):
     
     if args.local_rank in [-1, 0]:
         logging.info("Create model.........")
-    config_class, model_class, tokenizer_class = (BartConfig, BartForConditionalGeneration, BartTokenizer)
+    config_class, model_class, tokenizer_class = (AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer)
     tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
     model = model_class.from_pretrained(args.ckpt) if args.ckpt else model_class.from_pretrained(args.model_name_or_path) 
     model.resize_token_embeddings(len(tokenizer))
@@ -196,12 +196,12 @@ def main():
     # input and output
     parser.add_argument('--input_dir', required=True)
     parser.add_argument('--output_dir', required=True)
-    parser.add_argument('--model_name_or_path', required=True, help='pretrained language models')
+    parser.add_argument('--model_name_or_path', required=True)
     parser.add_argument('--ckpt', default=None)
 
     # training parameters
     parser.add_argument('--weight_decay', default=1e-5, type=float)
-    parser.add_argument('--batch_size', default=16, type=int)
+    parser.add_argument('--batch_size', default=128, type=int)
     parser.add_argument('--seed', type=int, default=666, help='random seed')
     parser.add_argument('--learning_rate', default=3e-5, type=float)
     parser.add_argument('--num_train_epochs', default=25, type=int)
@@ -220,10 +220,6 @@ def main():
     parser.add_argument('--local_rank', default=-1, type=int,
                     help='node rank for distributed training')
     parser.add_argument('--port', default=12355, type=int)
-
-    parser.add_argument('--mode', required=True, choices=['sparql', 'program', 'overnight', 'cypher'])
-    parser.add_argument('--ir_mode', default=None, choices=['TIR', 'UIR', 'CFQ_IR'])
-    parser.add_argument('--self_correct', action='store_true')
     
     # validating parameters
     # parser.add_argument('--num_return_sequences', default=1, type=int)

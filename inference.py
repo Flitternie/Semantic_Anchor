@@ -22,9 +22,7 @@ import warnings
 warnings.simplefilter("ignore") # hide warnings that caused by invalid sparql query
 
 def inference(args):
-    if args.mode == 'program':
-        from metrics import validate
-
+    from metrics import validate
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     logging.info("Create train_loader and val_loader.........")

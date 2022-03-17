@@ -1,5 +1,6 @@
 .vscode
-data/*
+data/*/data*/
+exp_*/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
