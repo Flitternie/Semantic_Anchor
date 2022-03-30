@@ -7,30 +7,10 @@ import random
 import torch
 from utils.misc import invert_dict
 
-def load_kqapro(args):
-    print('Build kb vocabulary')
-    vocab = {
-        'answer_token_to_idx': {}
-    }
-
-    print('Load questions')
-    train_set = json.load(open(os.path.join(args.input_dir, 'train.json')))
-    val_set = json.load(open(os.path.join(args.input_dir, 'val.json')))
-    test_set = json.load(open(os.path.join(args.input_dir, 'test.json')))
-    for question in chain(train_set, val_set, test_set):
-        for a in question['choices']:
-            if not a in vocab['answer_token_to_idx']:
-                vocab['answer_token_to_idx'][a] = len(vocab['answer_token_to_idx'])
-        question['input'] = question.pop('rewrite')
-        question['target'] = question.pop('sparql')
-    return train_set, val_set, test_set, vocab
-
 def load_general(args):
-    print('Build kb vocabulary')
     vocab = {
         'answer_token_to_idx': {}
     }
-
     print('Load data')
     train_set = json.load(open(os.path.join(args.input_dir, 'train.json')))
     val_set = json.load(open(os.path.join(args.input_dir, 'val.json')))

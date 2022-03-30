@@ -16,18 +16,23 @@ warnings.simplefilter("ignore")
 
 def evaluate_kqapro(args, given_answer, outputs):
     # evaluate on KQAPRO dataset
-    kb = DataForSPARQL(os.path.join("./data/kqapro/dataset_new/", 'kb.json'))
+    kb = DataForSPARQL(os.path.join("./data/kqapro/data/", 'kb.json'))
     from data.kqapro.evaluate import evaluate 
     return evaluate(args, given_answer, outputs, kb)
 
-def evaluate_webnlg():
+def evaluate_webnlg(args, outputs):
     # evaluate on WebNLG dataset
+    data_dir = './data/webnlg/data/'
+    try:
+        data_split = 'test_both' if args.inference else 'val'
+    except:
+        data_split = 'val'
     from data.webnlg.evaluate import evaluate
-    return evaluate
+    return evaluate(args, data_dir, outputs, data_split)
 
 def evaluate(outputs, targets):
     assert len(outputs) == len(targets)
-    return np.mean([1 if p.strip().lower() == g.strip().lower() else 0 for p, g in zip(outputs, targets)]), np.mean([1 if p.strip() == g.strip() else 0 for p, g in zip(outputs, targets)])
+    return np.mean([1 if p.strip() == g.strip() else 0 for p, g in zip(outputs, targets)]), np.mean([1 if p.strip().lower() == g.strip().lower() else 0 for p, g in zip(outputs, targets)])
 
 def validate(args, model, data, device, tokenizer):
     model.eval()
@@ -39,10 +44,16 @@ def validate(args, model, data, device, tokenizer):
             source_ids, source_mask, _, target_ids, answers = [x.to(device) for x in batch]
             outputs = model.module.generate(
                 input_ids=source_ids,
-                max_length = 500,
+                use_cache=True,
+                max_length = args.eval_max_length,
+                num_beams = args.beam_size,
+                length_penalty=1.0
             ) if hasattr(model, "module") else model.generate(
                 input_ids=source_ids,
-                max_length = 500,
+                use_cache=True,
+                max_length = args.eval_max_length,
+                num_beams = args.beam_size,
+                length_penalty=1.0
             ) 
 
             all_outputs.extend(outputs.cpu().numpy())
@@ -52,11 +63,16 @@ def validate(args, model, data, device, tokenizer):
         assert len(all_outputs) == len(all_targets) 
         outputs = [tokenizer.decode(output_id, skip_special_tokens = True, clean_up_tokenization_spaces = False) for output_id in all_outputs]
         targets = [tokenizer.decode(target_id, skip_special_tokens = True, clean_up_tokenization_spaces = False) for target_id in all_targets]
-        given_answer = [data.vocab['answer_idx_to_token'][a] for a in all_answers]
-    
+        try:
+            given_answer = [data.vocab['answer_idx_to_token'][a] for a in all_answers]
+        except:
+            given_answer = None
+            
     lf_matching, str_matching = evaluate(outputs, targets)
     if 'kqapro' in args.input_dir:
         lf_matching = evaluate_kqapro(args, given_answer, outputs)
+    elif 'webnlg' in args.input_dir:
+        lf_matching = evaluate_webnlg(args, outputs)
     logging.info('Execution accuracy: {}, String matching accuracy: {}'.format(lf_matching, str_matching))
 
     return lf_matching, outputs

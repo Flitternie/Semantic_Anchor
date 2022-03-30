@@ -1,18 +1,17 @@
+from lib2to3.pgen2 import token
 import os
 import json
 import pickle
 import argparse
 import numpy as np
 from tqdm import tqdm
-import re
-import regex
-import random
+import importlib.util
 
 from utils.misc import init_vocab
 from transformers import *
-from utils.data import load_general, load_kqapro
+from utils.data import load_general
 
-def encode_dataset(dataset, vocab, tokenizer):
+def encode_dataset(dataset, tokenizer, vocab=None):
     inputs = []
     targets = []
     choices = []
@@ -21,9 +20,8 @@ def encode_dataset(dataset, vocab, tokenizer):
     for item in tqdm(dataset):
         inputs.append(item['input'])
         targets.append(item['target'])
-        if 'choices' in item.keys():
+        if vocab and 'choices' in item.keys() and 'answer' in item.keys():
             choices.append([vocab['answer_token_to_idx'][w] for w in item['choices']])
-        if 'answers' in item.keys():
             answers.append(vocab['answer_token_to_idx'].get(item['answer']))
         
     sequences = inputs + targets
@@ -48,28 +46,33 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input_dir', required=True)
     parser.add_argument('--output_dir', required=True)
+    parser.add_argument('--config', required=True)
     parser.add_argument('--model_name_or_path', required=True)
     args = parser.parse_args()
     set_seed(666)
 
-    if 'kqapro' in args.input_dir:
-        train_set, val_set, test_set, vocab = load_kqapro(args)
-    else:
-        train_set, val_set, test_set, vocab = load_general(args)
+    try:
+        spec = importlib.util.spec_from_file_location("config", args.config)
+        config = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(config)
+        train_set, val_set, test_set, vocab = config.load_data(args)
+        task_special_tokens = config.special_tokens
+    except:
+        raise Exception('Error loading config file')
 
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir, exist_ok=True)
+    
     fn = os.path.join(args.output_dir, 'vocab.json')
-    print('Dump vocab to {}'.format(fn))
-
     with open(fn, 'w') as f:
         json.dump(vocab, f, indent=2)
     
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
+    tokenizer.add_tokens(task_special_tokens) 
     
     for name, dataset in zip(('train', 'val', 'test'), (train_set, val_set, test_set)):
         print('Encode {} set'.format(name))
-        outputs = encode_dataset(dataset, vocab, tokenizer)
+        outputs = encode_dataset(dataset, tokenizer, vocab)
         assert len(outputs) == 5
         with open(os.path.join(args.output_dir, '{}.pt'.format(name)), 'wb') as f:
             for o in outputs:

@@ -4,15 +4,8 @@ import pickle
 from tqdm import tqdm
 from datetime import date
 from .sparql_engine import get_sparql_answer
-import logging
 import re
 import numpy as np
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-8s %(message)s')
-logFormatter = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s')
-rootLogger = logging.getLogger()
-import warnings
-warnings.simplefilter("ignore") # hide warnings that caused by invalid sparql query
 
 def whether_equal(answer, pred):
     """

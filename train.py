@@ -7,6 +7,7 @@ import argparse
 import shutil
 import json
 import sys
+import importlib.util
 from tqdm import tqdm
 from datetime import date
 from utils.misc import MetricLogger, seed_everything, ProgressBar
@@ -45,14 +46,22 @@ def train(args):
         train_loader = DistributedDataLoader(train_dataset, train_vocab, args.batch_size//args.n_gpus, train_sampler, pretrain=args.pretrain)
     else:
         train_loader = DataLoader(vocab_json, train_pt, args.batch_size, training=True, pretrain=args.pretrain)
-    val_loader = DataLoader(vocab_json, val_pt, args.batch_size, training=False, pretrain=False)
-
-    kb = DataForSPARQL(os.path.join("./data/kqapro/dataset_new/", 'kb.json'))
+    val_loader = DataLoader(vocab_json, val_pt, 2*args.batch_size//args.n_gpus, training=False)
     
     if args.local_rank in [-1, 0]:
         logging.info("Create model.........")
     config_class, model_class, tokenizer_class = (AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer)
     tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
+
+    try:
+        spec = importlib.util.spec_from_file_location("config", args.config)
+        config = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(config)
+        task_special_tokens = config.special_tokens
+        tokenizer.add_tokens(task_special_tokens)
+    except:
+        raise Exception('Error loading config file')
+
     model = model_class.from_pretrained(args.ckpt) if args.ckpt else model_class.from_pretrained(args.model_name_or_path) 
     model.resize_token_embeddings(len(tokenizer))
     
@@ -104,11 +113,11 @@ def train(args):
     tr_loss, logging_loss = 0.0, 0.0
     best_acc, current_acc = 0.0, 0.0
     model.zero_grad()
-    if args.local_rank in [-1, 0]:
-        print("Current performance on validation set: %f" % (current_acc))
+    # if args.local_rank in [-1, 0]:
+    #     current_acc, _ = validate(args, model, val_loader, device, tokenizer)
+    #     print("Current performance on validation set: %f" % (current_acc))
     
-    logging_steps = round(len(train_loader.dataset)/args.batch_size) // args.logging_per_epoch
-    save_steps = logging_steps
+    save_steps = round(len(train_loader.dataset)/args.batch_size) // args.logging_per_epoch
     epochs_not_improving = 0
     
     for epoch_i in range(int(args.num_train_epochs)):
@@ -153,10 +162,10 @@ def train(args):
                 model.zero_grad()
                 global_step += 1
 
-            if logging_steps > 0 and global_step % logging_steps == 0 and args.local_rank in [-1, 0]:
+            if global_step % save_steps == 0 and args.local_rank in [-1, 0]:
                 logging.info("===================Dev==================")
-                current_acc, _ = validate(args, kb, model, val_loader, device, tokenizer)
-                print("Current best performance on validation set: %f" % (best_acc))
+                current_acc, _ = validate(args, model, val_loader, device, tokenizer)
+                # print("Current best performance on validation set: %f" % (current_acc))
             
             if save_steps > 0 and global_step % save_steps == 0 and current_acc > best_acc and args.local_rank in [-1, 0]:
                 epochs_not_improving = 0
@@ -167,9 +176,10 @@ def train(args):
                 output_dir = os.path.join(args.output_dir, "checkpoint-best")
                 if not os.path.exists(output_dir):
                     os.makedirs(output_dir, exist_ok=True)
+                # Take care of distributed/parallel training
                 model_to_save = (
                     model.module if hasattr(model, "module") else model
-                )  # Take care of distributed/parallel training
+                )  
                 model_to_save.save_pretrained(output_dir)
                 torch.save(args, os.path.join(output_dir, "training_args.bin"))
                 logging.info("Saving model checkpoint to %s", output_dir)
@@ -196,6 +206,7 @@ def main():
     # input and output
     parser.add_argument('--input_dir', required=True)
     parser.add_argument('--output_dir', required=True)
+    parser.add_argument('--config', required=True)
     parser.add_argument('--model_name_or_path', required=True)
     parser.add_argument('--ckpt', default=None)
 
@@ -205,16 +216,21 @@ def main():
     parser.add_argument('--seed', type=int, default=666, help='random seed')
     parser.add_argument('--learning_rate', default=3e-5, type=float)
     parser.add_argument('--num_train_epochs', default=25, type=int)
-    parser.add_argument('--logging_per_epoch', default=2, type=int)
+    parser.add_argument('--logging_per_epoch', default=1, type=int)
     parser.add_argument('--early_stopping', default=5, type=int)
     parser.add_argument('--warmup_proportion', default=0.1, type=float,
                         help="Proportion of training to perform linear learning rate warmup for,E.g., 0.1=10% of training.")
     parser.add_argument("--adam_epsilon", default=1e-8, type=float,
                         help="Epsilon for Adam optimizer.")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1,
-                        help="Number of updates steps to accumulate before performing a backward/update pass.", )
+                        help="Number of updates steps to accumulate before performing a backward/update pass.")
     parser.add_argument("--max_grad_norm", default=1.0, type=float,
                         help="Max gradient norm.")
+    
+    parser.add_argument("--eval_max_length", default=500, type=int,
+                        help="Eval max length.")
+    parser.add_argument("--beam_size", default=1, type=int,
+                        help="Beam size for inference.")
 
     parser.add_argument('--pretrain', action='store_true')
     parser.add_argument('--local_rank', default=-1, type=int,
