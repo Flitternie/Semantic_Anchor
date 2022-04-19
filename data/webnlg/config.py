@@ -1,6 +1,6 @@
 import os
 
-special_tokens = ['<H>', '</H>', '<R>', '</R>' '<T>', '</T>', '<S>']
+special_tokens = ['<H>', '</H>', '<R>', '</R>', '<T>', '</T>', '<S>']
 
 def reorder_triples(sequences):
     reordered_sequences = []
@@ -20,9 +20,13 @@ def reorder_triples(sequences):
         reordered_sequence = ''
         for key, value in reorder.items():
             reordered_sequence += " <S> <H> {} </H> ".format(key)
+            # reordered_sequence += " <H> {} ".format(key)
             for k, v in value.items():
                 reordered_sequence += " <R> {} </R> <T> {} </T> ".format(k, ' ; '.join(v))
             reordered_sequence += ' </S> '
+        #     reordered_sequence += "<R> {} <T> {} </T> </R> ".format(k, ' <S> '.join(v))
+        #     reordered_sequence += '</H>'
+        # reordered_sequences.append(reordered_sequence.replace('  <', ' <').strip())
         reordered_sequences.append(reordered_sequence.replace('>  <', '> <').strip())
     return reordered_sequences
 
@@ -38,12 +42,13 @@ def load_data(args):
     test_source = open(os.path.join(args.input_dir, 'test_both.source')).readlines()
     test_target = open(os.path.join(args.input_dir, 'test_both.target')).readlines()
     
-    print('Reorder triples')
-    print(train_source[-1])
-    train_source = reorder_triples(train_source)
-    val_source = reorder_triples(val_source)
-    test_source = reorder_triples(test_source)
-    print(train_source[-1])
+    if args.reorder:
+        print('Reorder triples')
+        print(train_source[-1])
+        train_source = reorder_triples(train_source)
+        val_source = reorder_triples(val_source)
+        test_source = reorder_triples(test_source)
+        print(train_source[-1])
     
     train_set = [{'input': s, 'target': t} for s, t in zip(train_source, train_target)]
     val_set = [{'input': s, 'target': t} for s, t in zip(val_source, val_target)]

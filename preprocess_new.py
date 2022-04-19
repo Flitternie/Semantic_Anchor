@@ -13,18 +13,20 @@ from utils.data import load_general
 
 def encode_dataset(dataset, tokenizer, vocab=None):
     inputs = []
+    intermediate_targets = []
     targets = []
     choices = []
     answers = []
     
     for item in tqdm(dataset):
         inputs.append(item['input'])
+        intermediate_targets.append(item['IR'])
         targets.append(item['target'])
         if vocab and 'choices' in item.keys() and 'answer' in item.keys():
             choices.append([vocab['answer_token_to_idx'][w] for w in item['choices']])
             answers.append(vocab['answer_token_to_idx'].get(item['answer']))
         
-    sequences = inputs + targets
+    sequences = inputs + intermediate_targets + targets
     encoded_inputs = tokenizer(sequences, padding = True)
     
     max_seq_length = len(encoded_inputs['input_ids'][0])
@@ -33,6 +35,9 @@ def encode_dataset(dataset, tokenizer, vocab=None):
     input_ids = tokenizer.batch_encode_plus(inputs, max_length = max_seq_length, padding='max_length', truncation = True)
     source_ids = np.array(input_ids['input_ids'], dtype = np.int32)
     source_mask = np.array(input_ids['attention_mask'], dtype = np.int32)
+
+    intermediate_target_ids = tokenizer.batch_encode_plus(intermediate_targets, max_length = max_seq_length, padding='max_length', truncation = True)
+    intermediate_target_ids = np.array(intermediate_target_ids['input_ids'], dtype = np.int32)
     
     target_ids = tokenizer.batch_encode_plus(targets, max_length = max_seq_length, padding='max_length', truncation = True)
     target_ids = np.array(target_ids['input_ids'], dtype = np.int32)
@@ -40,7 +45,7 @@ def encode_dataset(dataset, tokenizer, vocab=None):
     choices = np.array(choices, dtype = np.int32) if choices else np.array([0]*len(inputs), dtype = np.int32)
     answers = np.array(answers) if answers else np.array([0]*len(inputs), dtype = np.int32)
     
-    return source_ids, source_mask, target_ids, choices, answers
+    return source_ids, source_mask, intermediate_target_ids, target_ids, choices, answers
 
 def main():
     parser = argparse.ArgumentParser()
@@ -77,7 +82,7 @@ def main():
     for name, dataset in zip(('train', 'val', 'test'), (train_set, val_set, test_set)):
         print('Encode {} set'.format(name))
         outputs = encode_dataset(dataset, tokenizer, vocab)
-        assert len(outputs) == 5
+        assert len(outputs) == 6
         with open(os.path.join(args.output_dir, '{}.pt'.format(name)), 'wb') as f:
             for o in outputs:
                 pickle.dump(o, f)

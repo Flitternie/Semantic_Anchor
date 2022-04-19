@@ -12,8 +12,9 @@ from tqdm import tqdm
 from datetime import date
 from utils.misc import MetricLogger, seed_everything, ProgressBar
 from utils.load_kb import DataForSPARQL
-from utils.data import DataLoader, DistributedDataLoader, prepare_dataset
-from transformers import AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer
+from utils.data_new import DataLoader, DistributedDataLoader, prepare_dataset
+from transformers import BartConfig, BartTokenizer
+from model import BartForConditionalGeneration
 
 import torch.optim as optim
 import logging
@@ -31,7 +32,7 @@ import warnings
 warnings.simplefilter("ignore") # hide warnings that caused by invalid sparql query
 
 def train(args):
-    from metrics import validate
+    from metrics_new import validate
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     if args.local_rank in [-1, 0]:
@@ -41,16 +42,16 @@ def train(args):
     val_pt = os.path.join(args.input_dir, 'val.pt')
     
     if args.n_gpus > 1:
-        train_dataset, train_vocab = prepare_dataset(vocab_json, train_pt, training=True, pretrain=args.pretrain)
+        train_dataset, train_vocab = prepare_dataset(vocab_json, train_pt, training=True)
         train_sampler = DistributedSampler(train_dataset)
-        train_loader = DistributedDataLoader(train_dataset, train_vocab, args.batch_size//args.n_gpus, train_sampler, pretrain=args.pretrain)
+        train_loader = DistributedDataLoader(train_dataset, train_vocab, args.batch_size//args.n_gpus, train_sampler)
     else:
-        train_loader = DataLoader(vocab_json, train_pt, args.batch_size, training=True, pretrain=args.pretrain)
+        train_loader = DataLoader(vocab_json, train_pt, args.batch_size, training=True)
     val_loader = DataLoader(vocab_json, val_pt, 2*args.batch_size//args.n_gpus, training=False)
     
     if args.local_rank in [-1, 0]:
         logging.info("Create model.........")
-    config_class, model_class, tokenizer_class = (AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer)
+    config_class, model_class, tokenizer_class = (BartConfig, BartForConditionalGeneration, BartTokenizer)
     tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
 
     try:
@@ -113,9 +114,9 @@ def train(args):
     tr_loss, logging_loss = 0.0, 0.0
     best_acc, current_acc = 0.0, 0.0
     model.zero_grad()
-    # if args.local_rank in [-1, 0]:
-    #     current_acc, _ = validate(args, model, val_loader, device, tokenizer)
-    #     print("Current performance on validation set: %f" % (current_acc))
+    if args.local_rank in [-1, 0]:
+        current_acc, _ = validate(args, model, val_loader, device, tokenizer)
+        print("Current performance on validation set: %f" % (current_acc))
     
     save_steps = round(len(train_loader.dataset)/args.batch_size) // args.logging_per_epoch
     epochs_not_improving = 0
@@ -134,10 +135,12 @@ def train(args):
             model.train()
             batch = tuple(t.to(device) for t in batch)
             pad_token_id = tokenizer.pad_token_id
-            if not args.pretrain:
-                source_ids, source_mask, y = batch[0], batch[1], batch[-2]  
-            else:
-                source_ids, source_mask, y = batch[0], batch[1], batch[2]
+            source_ids, source_mask, intermediate, y = batch[0], batch[1], batch[-3], batch[-2]  
+            
+            intermediate_ids = intermediate[:, :-1].contiguous()
+            intermediate_labels = intermediate[:, 1:].clone()
+            intermediate_labels[intermediate[:, 1:] == pad_token_id] = -100
+
             y_ids = y[:, :-1].contiguous()
             labels = y[:, 1:].clone()
             labels[y[:, 1:] == pad_token_id] = -100
@@ -145,7 +148,9 @@ def train(args):
             inputs = {
                 "input_ids": source_ids.to(device),
                 "attention_mask": source_mask.to(device),
+                "intermediate_decoder_input_ids": intermediate_ids.to(device),
                 "decoder_input_ids": y_ids.to(device),
+                "intermediate_labels": intermediate_labels.to(device),
                 "labels": labels.to(device),
             }
             outputs = model(**inputs)
@@ -153,6 +158,7 @@ def train(args):
             if torch.cuda.device_count() > 1:
                 loss = loss.sum()
             loss.backward()
+            
             pbar(step, {'loss': loss.item()})
             tr_loss += loss.item()
             if (step + 1) % args.gradient_accumulation_steps == 0:
@@ -231,9 +237,6 @@ def main():
                         help="Eval max length.")
     parser.add_argument("--beam_size", default=1, type=int,
                         help="Beam size for inference.")
-
-    parser.add_argument('--pretrain', action='store_true')
-    parser.add_argument('--reorder', action='store_true')
     
     parser.add_argument('--local_rank', default=-1, type=int,
                     help='node rank for distributed training')
@@ -275,5 +278,37 @@ def main():
         dist.destroy_process_group()
 
 if __name__ == '__main__':
-    main()
+    # main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--ckpt', default=None)
+    parser.add_argument('--weight_decay', default=1e-5, type=float)
+    parser.add_argument('--batch_size', default=8, type=int)
+    parser.add_argument('--seed', type=int, default=666, help='random seed')
+    parser.add_argument('--learning_rate', default=3e-5, type=float)
+    parser.add_argument('--num_train_epochs', default=25, type=int)
+    parser.add_argument('--logging_per_epoch', default=1, type=int)
+    parser.add_argument('--early_stopping', default=5, type=int)
+    parser.add_argument('--warmup_proportion', default=0.1, type=float,
+                        help="Proportion of training to perform linear learning rate warmup for,E.g., 0.1=10% of training.")
+    parser.add_argument("--adam_epsilon", default=1e-8, type=float,
+                        help="Epsilon for Adam optimizer.")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1,
+                        help="Number of updates steps to accumulate before performing a backward/update pass.")
+    parser.add_argument("--max_grad_norm", default=1.0, type=float,
+                        help="Max gradient norm.")
+    parser.add_argument("--eval_max_length", default=500, type=int,
+                        help="Eval max length.")
+    parser.add_argument("--beam_size", default=1, type=int,
+                        help="Beam size for inference.")
+    parser.add_argument('--local_rank', default=-1, type=int,
+                    help='node rank for distributed training')
+    parser.add_argument('--port', default=12355, type=int)
+    args = parser.parse_args()
+    args.input_dir = './exp_files/test/'
+    args.output_dir = './exp_results/test/'
+    args.model_name_or_path = 'facebook/bart-base'
+    args.config = './data/kqapro/config_new.py'
+    args.n_gpus = 1
+    seed_everything(args.seed)
+    train(args)
 

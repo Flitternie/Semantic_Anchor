@@ -5,7 +5,6 @@ import numpy as np
 from tqdm import tqdm
 from utils.data import DataLoader
 from utils.load_kb import DataForSPARQL
-from transformers import BartConfig, BartForConditionalGeneration, BartTokenizer
 import logging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-8s %(message)s')
@@ -20,21 +19,6 @@ def evaluate_kqapro(args, given_answer, outputs):
     from data.kqapro.evaluate import evaluate 
     return evaluate(args, given_answer, outputs, kb)
 
-def evaluate_webnlg(args, outputs):
-    # evaluate on WebNLG dataset
-    data_dir = './data/webnlg/data/'
-    try:
-        data_split = 'test_both' if args.inference else 'val'
-    except:
-        data_split = 'val'
-    from data.webnlg.evaluate import evaluate
-    return evaluate(args, data_dir, outputs, data_split)
-
-def evaluate_webnlg_reverse(args, outputs, targets):
-    # evaluate on WebNLG-reverse dataset
-    from data.webnlg_reverse.evaluate import evaluate
-    return evaluate(args, outputs, targets)
-
 def evaluate(outputs, targets):
     assert len(outputs) == len(targets)
     return np.mean([1 if p.strip() == g.strip() else 0 for p, g in zip(outputs, targets)]), np.mean([1 if p.strip().lower() == g.strip().lower() else 0 for p, g in zip(outputs, targets)])
@@ -46,19 +30,19 @@ def validate(args, model, data, device, tokenizer):
     all_answers = []
     with torch.no_grad():
         for batch in tqdm(data, total=len(data)):
-            source_ids, source_mask, _, target_ids, answers = [x.to(device) for x in batch]
+            source_ids, source_mask, _, intermediate_target_ids, target_ids, answers = [x.to(device) for x in batch]
             outputs = model.module.generate(
                 input_ids=source_ids,
-                use_cache=True,
+                # use_cache=True,
                 max_length = args.eval_max_length,
-                num_beams = args.beam_size,
-                length_penalty=1.0
+                # num_beams = args.beam_size,
+                # length_penalty=1.0
             ) if hasattr(model, "module") else model.generate(
                 input_ids=source_ids,
-                use_cache=True,
+                # use_cache=True,
                 max_length = args.eval_max_length,
-                num_beams = args.beam_size,
-                length_penalty=1.0
+                # num_beams = args.beam_size,
+                # length_penalty=1.0
             ) 
 
             all_outputs.extend(outputs.cpu().numpy())
@@ -76,10 +60,6 @@ def validate(args, model, data, device, tokenizer):
     lf_matching, str_matching = evaluate(outputs, targets)
     if 'kqapro' in args.input_dir:
         lf_matching = evaluate_kqapro(args, given_answer, outputs)
-    elif 'webnlg_reverse' in args.input_dir:
-        lf_matching = evaluate_webnlg_reverse(args, outputs, targets)
-    elif 'webnlg' in args.input_dir:
-        lf_matching = evaluate_webnlg(args, outputs)
     logging.info('Execution accuracy: {}, String matching accuracy: {}'.format(lf_matching, str_matching))
 
     return lf_matching, outputs
