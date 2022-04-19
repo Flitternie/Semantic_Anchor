@@ -1,3 +1,4 @@
+from turtle import shape
 import torch
 import torch.nn as nn
 from typing import Optional, Tuple
@@ -61,18 +62,14 @@ class BartModel(BartPretrainedModel):
     ):
 
         # Bart automatically creates decoder_input_ids from input_ids if no decoder_input_ids are provided
-        if intermediate_decoder_input_ids is None and intermediate_decoder_inputs_embeds is None:
-            intermediate_decoder_input_ids = shift_tokens_right(
-                input_ids, self.config.pad_token_id, self.config.decoder_start_token_id
-            )
-
         if decoder_input_ids is None and decoder_inputs_embeds is None:
             decoder_input_ids = shift_tokens_right(
                 input_ids, self.config.pad_token_id, self.config.decoder_start_token_id
             )
-        
-        if intermediate_decoder_attention_mask is None:
-            intermediate_decoder_attention_mask = torch.ones([intermediate_decoder_input_ids.shape[0], intermediate_decoder_input_ids.shape[1]], device=intermediate_decoder_input_ids.device)
+        if intermediate_decoder_input_ids is None and intermediate_decoder_inputs_embeds is None:
+            intermediate_decoder_input_ids = shift_tokens_right(
+                input_ids, self.config.pad_token_id, self.config.decoder_start_token_id
+            )
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -107,7 +104,6 @@ class BartModel(BartPretrainedModel):
             encoder_attention_mask=attention_mask,
             head_mask=intermediate_decoder_head_mask,
             cross_attn_head_mask=cross_attn_head_mask,
-            past_key_values=past_key_values,
             inputs_embeds=intermediate_decoder_inputs_embeds,
             use_cache=use_cache,
             output_attentions=output_attentions,
@@ -120,7 +116,7 @@ class BartModel(BartPretrainedModel):
             input_ids=decoder_input_ids,
             attention_mask=decoder_attention_mask,
             encoder_hidden_states=torch.cat((encoder_outputs[0], intermediate_decoder_outputs[0]), dim=1),
-            encoder_attention_mask=torch.cat((attention_mask, intermediate_decoder_attention_mask), dim=1),
+            encoder_attention_mask=torch.cat((attention_mask, torch.ones([intermediate_decoder_outputs[0].shape[0], intermediate_decoder_outputs[0].shape[1]], device=attention_mask.device)), dim=1),
             head_mask=decoder_head_mask,
             cross_attn_head_mask=cross_attn_head_mask,
             past_key_values=past_key_values,
@@ -202,6 +198,7 @@ class BartForConditionalGeneration(BartPretrainedModel):
 
     def set_output_embeddings(self, new_embeddings):
         self.lm_head = new_embeddings
+        self.intermediate_lm_head = new_embeddings
 
     def forward(
         self,
@@ -266,15 +263,12 @@ class BartForConditionalGeneration(BartPretrainedModel):
         if labels is not None:
             loss_fct = nn.CrossEntropyLoss()
             masked_lm_loss = loss_fct(lm_logits.view(-1, self.config.vocab_size), labels.view(-1))
+        
+        masked_lm_loss = masked_lm_loss + intermediate_masked_lm_loss if intermediate_masked_lm_loss is not None else masked_lm_loss
 
         if not return_dict:
-            output = (lm_logits,) + (intermediate_lm_logits,) + outputs[1:]
-            if masked_lm_loss is not None and intermediate_masked_lm_loss is not None:
-                return ((masked_lm_loss,) + (intermediate_masked_lm_loss,)  + output) 
-            elif masked_lm_loss is not None:
-                return ((masked_lm_loss,) + output)
-            else:
-                return output
+            output = (lm_logits,) + outputs[1:]
+            return ((masked_lm_loss,) + output) if masked_lm_loss is not None else output
 
         return Seq2SeqLMOutput(
             loss=masked_lm_loss,
@@ -291,6 +285,7 @@ class BartForConditionalGeneration(BartPretrainedModel):
     def prepare_inputs_for_generation(
         self,
         decoder_input_ids,
+        intermediate_decoder_input_ids=None,
         past=None,
         attention_mask=None,
         head_mask=None,
@@ -308,6 +303,7 @@ class BartForConditionalGeneration(BartPretrainedModel):
             "input_ids": None,  # encoder_outputs is defined. input_ids not needed
             "encoder_outputs": encoder_outputs,
             "past_key_values": past,
+            "intermediate_decoder_input_ids": decoder_input_ids,
             "decoder_input_ids": decoder_input_ids,
             "attention_mask": attention_mask,
             "head_mask": head_mask,
@@ -328,7 +324,3 @@ class BartForConditionalGeneration(BartPretrainedModel):
                 tuple(past_state.index_select(0, beam_idx) for past_state in layer_past[:2]) + layer_past[2:],
             )
         return reordered_past
-
-
-if __name__ == '__main__':
-    model = BartForConditionalGeneration.from_pretrained('./Unified_IR/bart-base/')
