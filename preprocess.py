@@ -1,4 +1,3 @@
-from lib2to3.pgen2 import token
 import os
 import json
 import pickle
@@ -7,9 +6,7 @@ import numpy as np
 from tqdm import tqdm
 import importlib.util
 
-from utils.misc import init_vocab
-from transformers import *
-from utils.data import load_general
+from transformers import AutoTokenizer, set_seed
 
 def encode_dataset(dataset, tokenizer, vocab=None):
     inputs = []
@@ -23,6 +20,8 @@ def encode_dataset(dataset, tokenizer, vocab=None):
         if vocab and 'choices' in item.keys() and 'answer' in item.keys():
             choices.append([vocab['answer_token_to_idx'][w] for w in item['choices']])
             answers.append(vocab['answer_token_to_idx'].get(item['answer']))
+        elif 'domain' in item.keys():
+            answers.append(item['domain'])
         
     sequences = inputs + targets
     encoded_inputs = tokenizer(sequences, padding = True)

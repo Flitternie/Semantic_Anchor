@@ -1,8 +1,12 @@
 .vscode
-data/*/data*/
-exp_*/
-*.gz
 .DS_Store
+
+data/*/data*/
+data/*/evaluator*/
+exp_*/
+
+*.ipynb
+*.gz
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

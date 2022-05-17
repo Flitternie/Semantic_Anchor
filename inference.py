@@ -6,9 +6,9 @@ import importlib.util
 
 from utils.misc import MetricLogger, seed_everything, ProgressBar
 from utils.load_kb import DataForSPARQL
-from utils.data import DataLoader
 
 from transformers import AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer
+from model import CustomizedBartForConditionalGeneration
 
 import torch.optim as optim
 import logging
@@ -23,7 +23,13 @@ import warnings
 warnings.simplefilter("ignore") # hide warnings that caused by invalid sparql query
 
 def inference(args):
-    from metrics import validate
+    if args.customized:
+        from metrics_new import validate
+        from utils.data_new import DataLoader
+    else:
+        from metrics import validate
+        from utils.data import DataLoader
+
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     logging.info("Create train_loader and test_loader.........")
@@ -42,7 +48,10 @@ def inference(args):
         tokenizer.add_tokens(task_special_tokens)
     except:
         raise Exception('Error loading config file')
-    model = model_class.from_pretrained(args.ckpt)
+    if args.customized:
+        model = CustomizedBartForConditionalGeneration.from_pretrained(args.ckpt)
+    else:
+        model = model_class.from_pretrained(args.ckpt)
     model.resize_token_embeddings(len(tokenizer))
     model = model.to(device)
 
@@ -75,8 +84,11 @@ def main():
     parser.add_argument('--dim_hidden', default=1024, type=int)
     parser.add_argument('--alpha', default = 1e-4, type = float)
 
+    parser.add_argument('--customized', action='store_true')
+
     args = parser.parse_args()
     args.inference = True
+    args.local_rank = -1
 
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir, exist_ok=True)

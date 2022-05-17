@@ -5,7 +5,6 @@ import numpy as np
 from tqdm import tqdm
 from utils.data import DataLoader
 from utils.load_kb import DataForSPARQL
-from transformers import BartConfig, BartForConditionalGeneration, BartTokenizer
 import logging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-8s %(message)s')
@@ -35,11 +34,17 @@ def evaluate_webnlg_reverse(args, outputs, targets):
     from data.webnlg_reverse.evaluate import evaluate
     return evaluate(args, outputs, targets)
 
+def evaluate_overnight(args, outputs, targets, domains):
+    from data.overnight.evaluate import evaluate
+    return evaluate(args, outputs, targets, domains)
+
 def evaluate(outputs, targets):
     assert len(outputs) == len(targets)
     return np.mean([1 if p.strip() == g.strip() else 0 for p, g in zip(outputs, targets)]), np.mean([1 if p.strip().lower() == g.strip().lower() else 0 for p, g in zip(outputs, targets)])
 
 def validate(args, model, data, device, tokenizer):
+    if args.local_rank in [-1, 0]:
+        logging.info("===================Dev==================")
     model.eval()
     all_outputs = []
     all_targets = []
@@ -80,6 +85,9 @@ def validate(args, model, data, device, tokenizer):
         lf_matching = evaluate_webnlg_reverse(args, outputs, targets)
     elif 'webnlg' in args.input_dir:
         lf_matching = evaluate_webnlg(args, outputs)
-    logging.info('Execution accuracy: {}, String matching accuracy: {}'.format(lf_matching, str_matching))
+    elif 'overnight' in args.input_dir:
+        lf_matching = evaluate_overnight(args, outputs, targets, all_answers)
+    if args.local_rank in [-1, 0]:
+        logging.info('Execution accuracy: {}, String matching accuracy: {}'.format(lf_matching, str_matching))
 
     return lf_matching, outputs

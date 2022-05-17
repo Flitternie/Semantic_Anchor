@@ -20,12 +20,14 @@ def encode_dataset(dataset, tokenizer, vocab=None):
     
     for item in tqdm(dataset):
         inputs.append(item['input'])
-        intermediate_targets.append(item['IR'])
+        intermediate_targets.append(item['ir'])
         targets.append(item['target'])
         if vocab and 'choices' in item.keys() and 'answer' in item.keys():
             choices.append([vocab['answer_token_to_idx'][w] for w in item['choices']])
             answers.append(vocab['answer_token_to_idx'].get(item['answer']))
-        
+        elif 'domain' in item.keys():
+            answers.append(item['domain'])
+            
     sequences = inputs + intermediate_targets + targets
     encoded_inputs = tokenizer(sequences, padding = True)
     

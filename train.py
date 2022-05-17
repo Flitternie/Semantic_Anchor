@@ -1,34 +1,28 @@
 import os
-import pickle
-import torch
-import torch.optim as optim
-import torch.nn as nn
-import argparse
-import shutil
-import json
 import sys
-import importlib.util
-from tqdm import tqdm
-from datetime import date
-from utils.misc import MetricLogger, seed_everything, ProgressBar
-from utils.load_kb import DataForSPARQL
-from utils.data import DataLoader, DistributedDataLoader, prepare_dataset
-from transformers import AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer
-
-import torch.optim as optim
-import logging
 import time
-from utils.lr_scheduler import get_linear_schedule_with_warmup
+import logging
+import argparse
+import importlib
 
+import torch
+import torch.nn as nn
+import torch.optim as optim
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
+
+from transformers import AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer
+
+from utils.misc import MetricLogger, seed_everything, ProgressBar
+from utils.data import DataLoader, DistributedDataLoader, prepare_dataset
+from utils.lr_scheduler import get_linear_schedule_with_warmup
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)-8s %(message)s')
 logFormatter = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s')
 rootLogger = logging.getLogger()
 import warnings
-warnings.simplefilter("ignore") # hide warnings that caused by invalid sparql query
+warnings.simplefilter("ignore") 
 
 def train(args):
     from metrics import validate
@@ -41,16 +35,16 @@ def train(args):
     val_pt = os.path.join(args.input_dir, 'val.pt')
     
     if args.n_gpus > 1:
-        train_dataset, train_vocab = prepare_dataset(vocab_json, train_pt, training=True, pretrain=args.pretrain)
+        train_dataset, train_vocab = prepare_dataset(vocab_json, train_pt, training=True)
         train_sampler = DistributedSampler(train_dataset)
-        train_loader = DistributedDataLoader(train_dataset, train_vocab, args.batch_size//args.n_gpus, train_sampler, pretrain=args.pretrain)
+        train_loader = DistributedDataLoader(train_dataset, train_vocab, args.batch_size//args.n_gpus, train_sampler)
     else:
-        train_loader = DataLoader(vocab_json, train_pt, args.batch_size, training=True, pretrain=args.pretrain)
+        train_loader = DataLoader(vocab_json, train_pt, args.batch_size, training=True)
     val_loader = DataLoader(vocab_json, val_pt, 2*args.batch_size//args.n_gpus, training=False)
     
     if args.local_rank in [-1, 0]:
         logging.info("Create model.........")
-    config_class, model_class, tokenizer_class = (AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer)
+    _, model_class, tokenizer_class = (AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer)
     tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
 
     try:
@@ -59,15 +53,19 @@ def train(args):
         spec.loader.exec_module(config)
         task_special_tokens = config.special_tokens
         tokenizer.add_tokens(task_special_tokens)
+        if args.local_rank in [-1, 0]:
+            logging.info("Add {} special tokens.".format(len(task_special_tokens)))
     except:
         raise Exception('Error loading config file')
 
+    if args.local_rank in [-1, 0]:
+        logging.info("Initiating model parameters.........")
     model = model_class.from_pretrained(args.ckpt) if args.ckpt else model_class.from_pretrained(args.model_name_or_path) 
     model.resize_token_embeddings(len(tokenizer))
     
     if args.n_gpus > 1:
         model = nn.SyncBatchNorm.convert_sync_batchnorm(model).cuda()
-        model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
+        model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
     else:
         model = model.to(device)
 
@@ -105,17 +103,13 @@ def train(args):
     # Check if continuing training from a checkpoint
     if args.ckpt and args.local_rank in [-1, 0]:
         logging.info("Continuing training from checkpoint, will skip to saved global_step")
-        
-    if args.local_rank in [-1, 0]:
-        logging.info('Checking...')
-        logging.info("===================Dev==================")
-    
-    tr_loss, logging_loss = 0.0, 0.0
+            
+    tr_loss = 0.0
     best_acc, current_acc = 0.0, 0.0
     model.zero_grad()
-    # if args.local_rank in [-1, 0]:
-    #     current_acc, _ = validate(args, model, val_loader, device, tokenizer)
-    #     print("Current performance on validation set: %f" % (current_acc))
+    if args.local_rank in [-1, 0]:
+        # current_acc, _ = validate(args, model, val_loader, device, tokenizer)
+        print("Current performance on validation set: %f" % (current_acc))
     
     save_steps = round(len(train_loader.dataset)/args.batch_size) // args.logging_per_epoch
     epochs_not_improving = 0
@@ -153,8 +147,9 @@ def train(args):
             if torch.cuda.device_count() > 1:
                 loss = loss.sum()
             loss.backward()
-            pbar(step, {'loss': loss.item()})
-            tr_loss += loss.item()
+            loss_num = loss.item()
+            pbar(step, {'loss': loss_num})
+            tr_loss += loss_num
             if (step + 1) % args.gradient_accumulation_steps == 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
                 optimizer.step()
@@ -163,16 +158,15 @@ def train(args):
                 global_step += 1
 
             if global_step % save_steps == 0 and args.local_rank in [-1, 0]:
-                logging.info("===================Dev==================")
+                logging.info("Epoch %d loss: %.3f" % (epoch_i, loss_num))
                 current_acc, _ = validate(args, model, val_loader, device, tokenizer)
                 # print("Current best performance on validation set: %f" % (current_acc))
             
-            if save_steps > 0 and global_step % save_steps == 0 and current_acc > best_acc and args.local_rank in [-1, 0]:
+            if args.local_rank in [-1, 0] and save_steps > 0 and global_step % save_steps == 0 and current_acc > best_acc:
                 epochs_not_improving = 0
                 best_acc = current_acc
                 print("Best performance on validation set updated: %f" % (best_acc))
                 # Save model checkpoint
-                # output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step + prefix))
                 output_dir = os.path.join(args.output_dir, "checkpoint-best")
                 if not os.path.exists(output_dir):
                     os.makedirs(output_dir, exist_ok=True)
@@ -227,25 +221,25 @@ def main():
     parser.add_argument("--max_grad_norm", default=1.0, type=float,
                         help="Max gradient norm.")
     
+    # model hyperparameters
+    parser.add_argument('--dim_hidden', default=1024, type=int)
+    parser.add_argument('--alpha', default = 1e-4, type = float)
+    
+    # inference parameters
     parser.add_argument("--eval_max_length", default=500, type=int,
                         help="Eval max length.")
     parser.add_argument("--beam_size", default=1, type=int,
                         help="Beam size for inference.")
 
+    # special parameters
     parser.add_argument('--pretrain', action='store_true')
     parser.add_argument('--reorder', action='store_true')
-    
+
+    # distributed training
     parser.add_argument('--local_rank', default=-1, type=int,
                     help='node rank for distributed training')
     parser.add_argument('--port', default=12355, type=int)
-    
-    # validating parameters
-    # parser.add_argument('--num_return_sequences', default=1, type=int)
-    # parser.add_argument('--top_p', default=)
-    
-    # model hyperparameters
-    parser.add_argument('--dim_hidden', default=1024, type=int)
-    parser.add_argument('--alpha', default = 1e-4, type = float)
+       
     args = parser.parse_args()
 
     if not os.path.exists(args.output_dir):
@@ -254,6 +248,7 @@ def main():
     fileHandler = logging.FileHandler(os.path.join(args.output_dir, '{}.log'.format(time_)))
     fileHandler.setFormatter(logFormatter)
     rootLogger.addHandler(fileHandler)
+    
     # args display
     if args.local_rank in [-1, 0]:
         for k, v in vars(args).items():
