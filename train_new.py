@@ -131,11 +131,10 @@ def train(args):
             model.train()
             batch = tuple(t.to(device) for t in batch)
             pad_token_id = tokenizer.pad_token_id
-
-            source_ids, source_mask, intermediate, y = batch[0], batch[1], batch[3], batch[2]
+            source_ids, source_mask, intermediate, y = batch[0], batch[1], batch[-3], batch[-2]
+            
             intermediate_labels = intermediate[:, 1:].clone()
             intermediate_labels[intermediate[:, 1:] == pad_token_id] = -100
-
 
             y_ids = y[:, :-1].contiguous()
             labels = y[:, 1:].clone()
@@ -219,7 +218,7 @@ def main():
 
     # training parameters
     parser.add_argument('--weight_decay', default=1e-5, type=float)
-    parser.add_argument('--batch_size', default=32, type=int)
+    parser.add_argument('--batch_size', default=128, type=int)
     parser.add_argument('--seed', type=int, default=666, help='random seed')
     parser.add_argument('--learning_rate', default=3e-5, type=float)
     parser.add_argument('--num_train_epochs', default=25, type=int)
