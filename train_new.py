@@ -131,7 +131,7 @@ def train(args):
             model.train()
             batch = tuple(t.to(device) for t in batch)
             pad_token_id = tokenizer.pad_token_id
-            source_ids, source_mask, intermediate, y = batch[0], batch[1], batch[-3], batch[-2]  
+            source_ids, source_mask, intermediate, y = batch[0], batch[1], batch[-3], batch[-2]
             
             intermediate_labels = intermediate[:, 1:].clone()
             intermediate_labels[intermediate[:, 1:] == pad_token_id] = -100

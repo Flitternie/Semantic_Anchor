@@ -78,6 +78,7 @@ def post_process(text):
 def evaluate(args, given_answer, outputs, kb):
     count, correct = 0, 0
     pred_answers = []
+
     for a, s in tqdm(zip(given_answer, outputs)):
         pred_answer = get_sparql_answer(s, kb)
         if pred_answer == None:

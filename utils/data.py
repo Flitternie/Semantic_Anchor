@@ -69,7 +69,7 @@ class Dataset(torch.utils.data.Dataset):
             return source_ids, source_mask, choices, target_ids, answer
         else:
             target_ids = torch.LongTensor(self.target_ids[index])
-            return  source_ids, source_mask, target_ids
+            return source_ids, source_mask, target_ids
 
     def __len__(self):
         return len(self.source_ids)

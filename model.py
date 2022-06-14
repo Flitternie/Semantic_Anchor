@@ -30,6 +30,7 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
     def __init__(self, config: BartConfig):
         super().__init__(config)
         self.model = BartModel(config)
+
         self.register_buffer("final_logits_bias", torch.zeros((1, self.model.shared.num_embeddings)))
         self.lm_head = nn.Linear(config.d_model, self.model.shared.num_embeddings, bias=False)
         
@@ -53,10 +54,8 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
         # Update base model and current model config
         self.config.vocab_size = new_num_tokens
         self.vocab_size = new_num_tokens
-
         # Tie weights again if needed
         self.tie_weights()
-
         self._resize_final_logits_bias(new_num_tokens)
         return new_embeddings
 
@@ -109,8 +108,6 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
             if hasattr(module, "_tie_weights"):
                 module._tie_weights()
 
-
-
     def get_output_embeddings(self):
         return self.lm_head
     
@@ -122,8 +119,6 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
     
     def set_intermediate_output_embeddings(self, new_embeddings):
         self.intermediate_lm_head = new_embeddings
-    
-
 
     def forward(
         self,
@@ -179,8 +174,8 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
             output_hidden_states=True,
             return_dict=return_dict,
         )
-        lm_logits = self.lm_head(outputs[0]) + self.final_logits_bias
 
+        lm_logits = self.lm_head(outputs[0]) + self.final_logits_bias
         masked_lm_loss = None        
         if labels is not None:
             loss_fct = CrossEntropyLoss()
