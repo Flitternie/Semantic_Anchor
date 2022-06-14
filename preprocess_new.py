@@ -49,6 +49,10 @@ def encode_dataset(dataset, tokenizer, vocab=None):
     
     return source_ids, source_mask, intermediate_target_ids, target_ids, choices, answers
 
+
+def extract_first_order_syntax(ir: str):
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input_dir', required=True)
