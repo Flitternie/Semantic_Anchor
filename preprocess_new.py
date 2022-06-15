@@ -6,6 +6,7 @@ import argparse
 import numpy as np
 from tqdm import tqdm
 import importlib.util
+import re
 
 from utils.misc import init_vocab
 from transformers import *
@@ -20,7 +21,7 @@ def encode_dataset(dataset, tokenizer, vocab=None):
     
     for item in tqdm(dataset):
         inputs.append(item['input'])
-        intermediate_targets.append(item['ir'])
+        intermediate_targets.append(extract_first_order_syntax(item['ir']))
         targets.append(item['target'])
         if vocab and 'choices' in item.keys() and 'answer' in item.keys():
             choices.append([vocab['answer_token_to_idx'][w] for w in item['choices']])
@@ -50,7 +51,8 @@ def encode_dataset(dataset, tokenizer, vocab=None):
     return source_ids, source_mask, intermediate_target_ids, target_ids, choices, answers
 
 
-def extract_first_order_syntax(ir: str):
+def extract_first_order_syntax(ir: str) -> [str]:
+    return " ".join(re.findall(r"(?<=\<[A-Z]\>)[^\<\>]*(?=\<\/[A-Z]\>)", ir))
 
 
 def main():

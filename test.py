@@ -1,3 +1,5 @@
+import json
+
 import torch
 import torch.nn as nn
 from torch.nn.modules.loss import CrossEntropyLoss
@@ -22,6 +24,11 @@ from utils.misc import MetricLogger, seed_everything, ProgressBar
 from utils.data import DataLoader, DistributedDataLoader, prepare_dataset
 from utils.lr_scheduler import get_linear_schedule_with_warmup
 import os
+import re
+
+
+def extract_first_order_syntax(ir: str) -> [str]:
+    return " ".join(re.findall(r"(?<=\<[A-Z]\>)[^\<\>]*(?=\<\/[A-Z]\>)", ir))
 
 
 if __name__ == "__main__":
@@ -31,8 +38,5 @@ if __name__ == "__main__":
     val_pt = os.path.join(input_dir, 'val.pt')
     tok = AutoTokenizer.from_pretrained('../../../../ldata/sjd/bart-base/')
     train_dataset, train_vocab = prepare_dataset(vocab_json, train_pt, training=True)
-    for ts in train_dataset[0][:4]:
-        print(tok.decode(ts))
-
-    # print(train_vocab)
-
+    print(tok.decode(train_dataset[0][3]))
+    print(train_dataset[0][3])
