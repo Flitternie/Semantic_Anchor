@@ -39,4 +39,4 @@ if __name__ == "__main__":
     tok = AutoTokenizer.from_pretrained('../../../../ldata/sjd/bart-base/')
     train_dataset, train_vocab = prepare_dataset(vocab_json, train_pt, training=True)
     print(tok.decode(train_dataset[0][3]))
-    print(train_dataset[0][3])
+    print(tok.decode(train_dataset[0][2]))
