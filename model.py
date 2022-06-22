@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.nn.modules.loss import CrossEntropyLoss
-
+import torch.nn.functional as F
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
@@ -9,6 +9,9 @@ from transformers.modeling_outputs import BaseModelOutput, Seq2SeqModelOutput, S
 from transformers.models.bart.modeling_bart import BartModel, BartPretrainedModel, shift_tokens_right
 from transformers.models.bart.configuration_bart import BartConfig
 from transformers.file_utils import ModelOutput
+from transformers import AutoTokenizer
+
+from time import time
 
 @dataclass
 class CustomizedSeq2SeqLMOutput(ModelOutput):
@@ -30,6 +33,7 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
     def __init__(self, config: BartConfig):
         super().__init__(config)
         self.model = BartModel(config)
+
         self.register_buffer("final_logits_bias", torch.zeros((1, self.model.shared.num_embeddings)))
         self.lm_head = nn.Linear(config.d_model, self.model.shared.num_embeddings, bias=False)
         
@@ -53,10 +57,8 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
         # Update base model and current model config
         self.config.vocab_size = new_num_tokens
         self.vocab_size = new_num_tokens
-
         # Tie weights again if needed
         self.tie_weights()
-
         self._resize_final_logits_bias(new_num_tokens)
         return new_embeddings
 
@@ -109,8 +111,6 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
             if hasattr(module, "_tie_weights"):
                 module._tie_weights()
 
-
-
     def get_output_embeddings(self):
         return self.lm_head
     
@@ -122,8 +122,6 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
     
     def set_intermediate_output_embeddings(self, new_embeddings):
         self.intermediate_lm_head = new_embeddings
-    
-
 
     def forward(
         self,
@@ -154,6 +152,7 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
 
         Returns:
         """
+        tok = AutoTokenizer.from_pretrained('../../../../ldata/sjd/bart-base/')
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if labels is not None:
@@ -179,8 +178,8 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
             output_hidden_states=True,
             return_dict=return_dict,
         )
-        lm_logits = self.lm_head(outputs[0]) + self.final_logits_bias
 
+        lm_logits = self.lm_head(outputs[0]) + self.final_logits_bias
         masked_lm_loss = None        
         if labels is not None:
             loss_fct = CrossEntropyLoss()
@@ -192,7 +191,19 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
         masked_intermediate_lm_loss = None
         if intermediate_labels is not None:
             intermediate_loss_fct = CrossEntropyLoss()
-            masked_intermediate_lm_loss = intermediate_loss_fct(intermediate_lm_logits.view(-1, self.config.vocab_size), intermediate_labels.view(-1))
+            st = time()
+            _, supervised_len = torch.where(intermediate_labels == 2)
+            supervised_pos = supervised_len.repeat((intermediate_lm_logits.size()[1], 1)).T
+            all_pos = torch.arange(
+                intermediate_lm_logits.size()[1]
+            ).repeat((intermediate_lm_logits.size()[0], 1)).to(intermediate_lm_logits.device)
+
+            new_intermediate_labels = intermediate_labels.clone()
+            new_intermediate_labels[new_intermediate_labels == -100] = 1
+            one_hot_intermediate_labels = F.one_hot(new_intermediate_labels, num_classes=self.config.vocab_size).float()
+            masking = torch.broadcast_to(torch.unsqueeze(all_pos < supervised_pos, 2), (*all_pos.size(), self.config.vocab_size))
+            new_intermediate_lm_logits = intermediate_lm_logits.where(masking, one_hot_intermediate_labels)
+            masked_intermediate_lm_loss = intermediate_loss_fct(new_intermediate_lm_logits.view(-1, self.config.vocab_size), new_intermediate_labels.view(-1))
             masked_lm_loss = masked_lm_loss + alpha * masked_intermediate_lm_loss
 
         if not return_dict:

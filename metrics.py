@@ -15,7 +15,7 @@ warnings.simplefilter("ignore")
 
 def evaluate_kqapro(args, given_answer, outputs):
     # evaluate on KQAPRO dataset
-    kb = DataForSPARQL(os.path.join("./data/kqapro/data/", 'kb.json'))
+    kb = DataForSPARQL(os.path.join("../../../../ldata/sjd/UIR/kqapro/", 'kb.json'))
     from data.kqapro.evaluate import evaluate 
     return evaluate(args, given_answer, outputs, kb)
 

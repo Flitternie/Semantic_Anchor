@@ -19,6 +19,5 @@ def load_data(args):
             if not a in vocab['answer_token_to_idx']:
                 vocab['answer_token_to_idx'][a] = len(vocab['answer_token_to_idx'])
         question['input'] = question.pop('rewrite')
-        question['ir'] = question.pop('origin')
         question['target'] = question.pop('sparql')
     return train_set, val_set, test_set, vocab
