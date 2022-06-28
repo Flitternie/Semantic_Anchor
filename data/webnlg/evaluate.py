@@ -11,7 +11,7 @@ def convert_text(text):
 
 def eval_meteor_test_webnlg(folder_data, pred_file, dataset):
     dir_path = os.path.dirname(os.path.realpath(__file__))
-    folder_data_before = dir_path + "/utils"
+    folder_data_before = dir_path + "/../utils"
     cmd_string = "java -jar " + folder_data_before + "/meteor-1.5.jar " + pred_file + " " \
                   + folder_data + "/" + dataset + ".target_eval_meteor -l en -norm -r 3 > " + pred_file.replace("txt", "meteor")
     os.system(cmd_string)
@@ -21,7 +21,7 @@ def eval_meteor_test_webnlg(folder_data, pred_file, dataset):
 
 def eval_chrf_test_webnlg(folder_data, pred_file, dataset):
     dir_path = os.path.dirname(os.path.realpath(__file__))
-    folder_data_before = dir_path + "/utils"
+    folder_data_before = dir_path + "/../utils"
     cmd_string = "python " + folder_data_before + "/chrf++.py -H " + pred_file + " -R " \
                   + folder_data + "/" + dataset + ".target_eval_crf > " + pred_file.replace("txt", "chrf")
     os.system(cmd_string)
@@ -31,7 +31,7 @@ def eval_chrf_test_webnlg(folder_data, pred_file, dataset):
 
 def eval_bleu(folder_data, pred_file, dataset):
     dir_path = os.path.dirname(os.path.realpath(__file__))
-    folder_data_before = dir_path + "/utils"
+    folder_data_before = dir_path + "/../utils"
     cmd_string = "perl " + folder_data_before + "/multi-bleu.perl -lc " + folder_data + "/" + dataset + ".target_eval " \
                   + folder_data + "/" + dataset + ".target2_eval " + folder_data + "/" + dataset + ".target3_eval < " \
                   + pred_file + " > " + pred_file.replace("txt", "bleu")
@@ -46,7 +46,7 @@ def eval_bleu(folder_data, pred_file, dataset):
 
 def eval_bleu_sents_tok(pred_file, folder_data, dataset):
     dir_path = os.path.dirname(os.path.realpath(__file__))
-    folder_data_before = dir_path + "/utils"
+    folder_data_before = dir_path + "/../utils"
     cmd_string = "perl " + folder_data_before + "/tokenizer.perl -threads 4 -no-escape < " + pred_file + " > " +\
                  pred_file + "_tok"
     os.system(cmd_string)
@@ -63,7 +63,7 @@ def eval_bleu_sents_tok(pred_file, folder_data, dataset):
 def eval_meteor(ref_file, pred_file):
 
     dir_path = os.path.dirname(os.path.realpath(__file__))
-    folder_data_before = dir_path + "/utils"
+    folder_data_before = dir_path + "/../utils"
 
     cmd_string = "java -jar " + folder_data_before + "/meteor-1.5.jar " + pred_file + " " \
                   + ref_file + " > " + pred_file.replace("txt", "meteor")
@@ -75,7 +75,7 @@ def eval_meteor(ref_file, pred_file):
 def eval_chrf(ref_file, pred_file):
 
     dir_path = os.path.dirname(os.path.realpath(__file__))
-    folder_data_before = dir_path + "/utils"
+    folder_data_before = dir_path + "/../utils"
 
     cmd_string = "python " + folder_data_before + "/chrf++.py -H " + pred_file + " -R " \
                   + ref_file + " > " + pred_file.replace("txt", "chrf")
