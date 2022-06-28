@@ -34,6 +34,15 @@ def evaluate_webnlg_reverse(args, outputs, targets):
     from data.webnlg_reverse.evaluate import evaluate
     return evaluate(args, outputs, targets)
 
+def evaluate_agenda(args, outputs,):
+    data_dir = './data/agenda/data/'
+    try:
+        data_split = 'test' if args.inference else 'val'
+    except:
+        data_split = 'val'
+    from data.agenda.evaluate import evaluate
+    return evaluate(args, data_dir, outputs, data_split)
+
 def evaluate_overnight(args, outputs, targets, domains):
     from data.overnight.evaluate import evaluate
     return evaluate(args, outputs, targets, domains)
@@ -71,8 +80,8 @@ def validate(args, model, data, device, tokenizer):
             all_answers.extend(answers.cpu().numpy())
             
         assert len(all_outputs) == len(all_targets) 
-        outputs = [tokenizer.decode(output_id, skip_special_tokens = True, clean_up_tokenization_spaces = False) for output_id in all_outputs]
-        targets = [tokenizer.decode(target_id, skip_special_tokens = True, clean_up_tokenization_spaces = False) for target_id in all_targets]
+        outputs = [tokenizer.decode(output_id, skip_special_tokens = True, clean_up_tokenization_spaces = True) for output_id in all_outputs]
+        targets = [tokenizer.decode(target_id, skip_special_tokens = True, clean_up_tokenization_spaces = True) for target_id in all_targets]
         try:
             given_answer = [data.vocab['answer_idx_to_token'][a] for a in all_answers]
         except:
@@ -85,6 +94,8 @@ def validate(args, model, data, device, tokenizer):
         lf_matching = evaluate_webnlg_reverse(args, outputs, targets)
     elif 'webnlg' in args.input_dir:
         lf_matching = evaluate_webnlg(args, outputs)
+    elif 'agenda' in args.input_dir:
+        lf_matching = evaluate_agenda(args, outputs)
     elif 'overnight' in args.input_dir:
         lf_matching = evaluate_overnight(args, outputs, targets, all_answers)
     if args.local_rank in [-1, 0]:

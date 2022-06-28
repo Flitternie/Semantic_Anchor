@@ -1,6 +1,7 @@
 .vscode
 .DS_Store
 
+data/agenda/
 data/*/data*/
 data/*/evaluator*/
 exp_*/
