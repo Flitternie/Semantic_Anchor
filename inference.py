@@ -74,7 +74,7 @@ def main():
 
     # training parameters
     parser.add_argument('--batch_size', default=256, type=int)
-    parser.add_argument('--seed', type=int, default=666, help='random seed')
+    parser.add_argument('--seed', type=int, default=42, help='random seed')
     parser.add_argument("--eval_max_length", default=500, type=int,
                         help="Eval max length.")
     parser.add_argument("--beam_size", default=1, type=int,

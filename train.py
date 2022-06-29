@@ -234,7 +234,7 @@ def main():
     # training parameters
     parser.add_argument('--weight_decay', default=1e-5, type=float)
     parser.add_argument('--batch_size', default=128, type=int)
-    parser.add_argument('--seed', type=int, default=666, help='random seed')
+    parser.add_argument('--seed', type=int, default=42, help='random seed')
     parser.add_argument('--learning_rate', default=3e-5, type=float)
     parser.add_argument('--num_train_epochs', default=25, type=int)
     parser.add_argument('--logging_per_epoch', default=1, type=int)
@@ -294,8 +294,8 @@ if __name__ == '__main__':
     # parser = argparse.ArgumentParser()
     # parser.add_argument('--ckpt', default=None)
     # parser.add_argument('--weight_decay', default=1e-5, type=float)
-    # parser.add_argument('--batch_size', default=64, type=int)
-    # parser.add_argument('--seed', type=int, default=666, help='random seed')
+    # parser.add_argument('--batch_size', default=32, type=int)
+    # parser.add_argument('--seed', type=int, default=42, help='random seed')
     # parser.add_argument('--learning_rate', default=3e-5, type=float)
     # parser.add_argument('--num_train_epochs', default=25, type=int)
     # parser.add_argument('--logging_per_epoch', default=1, type=int)
@@ -316,10 +316,11 @@ if __name__ == '__main__':
     #                 help='node rank for distributed training')
     # parser.add_argument('--port', default=12355, type=int)
     # args = parser.parse_args()
-    # args.input_dir = './exp_files/kqapro/test/'
-    # args.output_dir = './exp_results/kqapro/test/'
-    # args.model_name_or_path = '../Unified_IR/bart-base/'
+    # args.input_dir = './new_exp_files/kqapro/'
+    # args.output_dir = './new_exp_results/kqapro/'
+    # args.model_name_or_path = '../bart-base/'
     # args.config = './data/kqapro/config.py'
+    # args.customized = True
     # args.n_gpus = 1
     # seed_everything(args.seed)
     # train(args)

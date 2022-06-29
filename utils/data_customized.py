@@ -14,7 +14,7 @@ def collate(batch):
     source_mask = torch.stack(batch[1])
     choices = torch.stack(batch[2])
     if batch[-1][0] is None:
-        intermediate_target_ids, target_ids, answer = None, None
+        intermediate_target_ids, target_ids, answer = None, None, None
     else:
         intermediate_target_ids = torch.stack(batch[3])
         target_ids = torch.stack(batch[4])

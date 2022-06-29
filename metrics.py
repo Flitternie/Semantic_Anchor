@@ -97,22 +97,23 @@ def validate(args, model, data, device, tokenizer):
             all_intermediate_targets = [tokenizer.decode(target_id, skip_special_tokens = True, clean_up_tokenization_spaces = True) for target_id in all_intermediate_targets]
         
         try:
-            given_answer = [[data.vocab['answer_idx_to_token'][a] for a in al] for al in all_answers]
+            given_answer = [[data.vocab['answer_idx_to_token'][a] for a in [al]] for al in all_answers]
         except Exception as e:
+            print(e)
             given_answer = None
 
-        lf_matching, str_matching = evaluate(outputs, targets)
-        if 'kqapro' in args.input_dir:
-            lf_matching = evaluate_kqapro(args, given_answer, outputs)
-        elif 'webnlg_reverse' in args.input_dir:
-            lf_matching = evaluate_webnlg_reverse(args, outputs, targets)
-        elif 'webnlg' in args.input_dir:
-            lf_matching = evaluate_webnlg(args, outputs)
-        elif 'agenda' in args.input_dir:
-            lf_matching = evaluate_agenda(args, outputs)
-        elif 'overnight' in args.input_dir:
-            lf_matching = evaluate_overnight(args, outputs, targets, all_answers)
-        if args.local_rank in [-1, 0]:
-            logging.info('Execution accuracy: {}, String matching accuracy: {}'.format(lf_matching, str_matching))
+    lf_matching, str_matching = evaluate(outputs, targets)
+    if 'kqapro' in args.input_dir:
+        lf_matching = evaluate_kqapro(args, given_answer, outputs)
+    elif 'webnlg_reverse' in args.input_dir:
+        lf_matching = evaluate_webnlg_reverse(args, outputs, targets)
+    elif 'webnlg' in args.input_dir:
+        lf_matching = evaluate_webnlg(args, outputs)
+    elif 'agenda' in args.input_dir:
+        lf_matching = evaluate_agenda(args, outputs)
+    elif 'overnight' in args.input_dir:
+        lf_matching = evaluate_overnight(args, outputs, targets, all_answers)
+    if args.local_rank in [-1, 0]:
+        logging.info('Execution accuracy: {}, String matching accuracy: {}'.format(lf_matching, str_matching))
 
-        return lf_matching, outputs
+    return lf_matching, outputs

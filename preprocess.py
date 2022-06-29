@@ -68,7 +68,7 @@ def main():
 
     parser.add_argument('--customized', action='store_true')
     args = parser.parse_args()
-    set_seed(666)
+    set_seed(42)
 
     try:
         spec = importlib.util.spec_from_file_location("config", args.config)
