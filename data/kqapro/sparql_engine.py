@@ -10,7 +10,6 @@ from utils.value_class import ValueClass
 
 
 virtuoso_address = "http://166.111.68.66:25890/sparql"
-# virtuoso_graph_uri = 'sjx'
 
 
 def legal(s):

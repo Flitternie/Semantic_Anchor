@@ -1,9 +1,5 @@
-import os
 import json
-from itertools import chain
-from logging import basicConfig
 import pickle
-import random
 import torch
 from utils.misc import invert_dict
 
@@ -24,7 +20,6 @@ def collate(batch):
         target_ids = torch.stack(batch[4])
         answer = torch.cat(batch[5])
     return source_ids, source_mask, choices, intermediate_target_ids, target_ids, answer
-
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs):
@@ -65,7 +60,6 @@ class DataLoader(torch.utils.data.DataLoader):
             )
         self.vocab = vocab
 
-
 def prepare_dataset(vocab_json, question_pt, training=False):
     vocab = load_vocab(vocab_json)
     
@@ -88,6 +82,3 @@ class DistributedDataLoader(torch.utils.data.DataLoader):
             pin_memory=True,
             collate_fn=collate, 
             )
-        
-        
-        

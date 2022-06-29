@@ -13,10 +13,13 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 
 from transformers import AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer
+import transformers.utils.logging as transformers_logging 
+from model import CustomizedBartForConditionalGeneration
 
-from utils.misc import MetricLogger, seed_everything, ProgressBar
-from utils.data import DataLoader, DistributedDataLoader, prepare_dataset
+from utils.misc import seed_everything, ProgressBar
 from utils.lr_scheduler import get_linear_schedule_with_warmup
+
+from metrics import validate
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)-8s %(message)s')
 logFormatter = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s')
@@ -25,8 +28,11 @@ import warnings
 warnings.simplefilter("ignore") 
 
 def train(args):
-    from metrics import validate
-
+    if args.customized:
+        from utils.data_customized import DataLoader, DistributedDataLoader, prepare_dataset
+    else:
+        from utils.data import DataLoader, DistributedDataLoader, prepare_dataset
+        
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     if args.local_rank in [-1, 0]:
         logging.info("Create train_loader and val_loader.........")
@@ -44,7 +50,10 @@ def train(args):
     
     if args.local_rank in [-1, 0]:
         logging.info("Create model.........")
-    _, model_class, tokenizer_class = (AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer)
+    if args.customized:
+        _, model_class, tokenizer_class = (AutoConfig, CustomizedBartForConditionalGeneration, AutoTokenizer)
+    else:
+        _, model_class, tokenizer_class = (AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer)
     tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
 
     try:
@@ -58,9 +67,10 @@ def train(args):
     except:
         raise Exception('Error loading config file')
 
+    transformers_logging.set_verbosity_error()
     if args.local_rank in [-1, 0]:
         logging.info("Initiating model parameters.........")
-    model = model_class.from_pretrained(args.ckpt) if args.ckpt else model_class.from_pretrained(args.model_name_or_path) 
+    model = model_class.from_pretrained(args.ckpt) if args.ckpt else model_class.from_pretrained(args.model_name_or_path)
     model.resize_token_embeddings(len(tokenizer))
     
     if args.n_gpus > 1:
@@ -103,12 +113,12 @@ def train(args):
     # Check if continuing training from a checkpoint
     if args.ckpt and args.local_rank in [-1, 0]:
         logging.info("Continuing training from checkpoint, will skip to saved global_step")
-            
+    
     tr_loss = 0.0
     best_acc, current_acc = 0.0, 0.0
     model.zero_grad()
     if args.local_rank in [-1, 0]:
-        # current_acc, _ = validate(args, model, val_loader, device, tokenizer)
+        current_acc, _ = validate(args, model, val_loader, device, tokenizer)
         print("Current performance on validation set: %f" % (current_acc))
     
     save_steps = round(len(train_loader.dataset)/args.batch_size) // args.logging_per_epoch
@@ -128,15 +138,32 @@ def train(args):
             model.train()
             batch = tuple(t.to(device) for t in batch)
             pad_token_id = tokenizer.pad_token_id
-            if not args.pretrain:
-                source_ids, source_mask, y = batch[0], batch[1], batch[-2]  
+
+            if args.customized:
+                source_ids, source_mask, intermediate, y = batch[0], batch[1], batch[-3], batch[-2]
+                intermediate_labels = intermediate[:, 1:].clone()
+                intermediate_labels[intermediate[:, 1:] == pad_token_id] = -100
+           
+                # alpha = 1 - (args.num_train_epochs - epoch_i) / args.num_train_epochs
+                alpha = ( 1 + ( args.num_train_epochs // 2 - epoch_i ) / args.num_train_epochs // 2 ) ** 2 / 2
+                # alpha = ( ( args.num_train_epochs - epoch_i ) / args.num_train_epochs ) ** 2
             else:
-                source_ids, source_mask, y = batch[0], batch[1], batch[2]
+                source_ids, source_mask, y = batch[0], batch[1], batch[-2]
             y_ids = y[:, :-1].contiguous()
             labels = y[:, 1:].clone()
             labels[y[:, 1:] == pad_token_id] = -100
-
-            inputs = {
+            
+            if args.customized:
+                inputs = {
+                    "input_ids": source_ids.to(device),
+                    "attention_mask": source_mask.to(device),
+                    "decoder_input_ids": y_ids.to(device),
+                    "intermediate_labels": intermediate_labels.to(device),
+                    "labels": labels.to(device),
+                    "alpha": alpha
+                }
+            else:
+                inputs = {
                 "input_ids": source_ids.to(device),
                 "attention_mask": source_mask.to(device),
                 "decoder_input_ids": y_ids.to(device),
@@ -158,8 +185,8 @@ def train(args):
                 global_step += 1
 
             if global_step % save_steps == 0 and args.local_rank in [-1, 0]:
-                logging.info("Epoch %d loss: %.3f" % (epoch_i, loss_num))
-                current_acc, _ = validate(args, model, val_loader, device, tokenizer)
+                    logging.info("Epoch %d loss: %.3f" % (epoch_i, loss_num))
+                    current_acc, _ = validate(args, model, val_loader, device, tokenizer)
                 # print("Current best performance on validation set: %f" % (current_acc))
             
             if args.local_rank in [-1, 0] and save_steps > 0 and global_step % save_steps == 0 and current_acc > best_acc:
@@ -221,25 +248,18 @@ def main():
     parser.add_argument("--max_grad_norm", default=1.0, type=float,
                         help="Max gradient norm.")
     
-    # model hyperparameters
-    parser.add_argument('--dim_hidden', default=1024, type=int)
-    parser.add_argument('--alpha', default = 1e-4, type = float)
-    
-    # inference parameters
     parser.add_argument("--eval_max_length", default=500, type=int,
                         help="Eval max length.")
     parser.add_argument("--beam_size", default=1, type=int,
                         help="Beam size for inference.")
 
     # special parameters
-    parser.add_argument('--pretrain', action='store_true')
-    parser.add_argument('--reorder', action='store_true')
-
-    # distributed training
+    parser.add_argument('--customized', action='store_true')
+    
     parser.add_argument('--local_rank', default=-1, type=int,
                     help='node rank for distributed training')
     parser.add_argument('--port', default=12355, type=int)
-       
+    
     args = parser.parse_args()
 
     if not os.path.exists(args.output_dir):
@@ -248,7 +268,7 @@ def main():
     fileHandler = logging.FileHandler(os.path.join(args.output_dir, '{}.log'.format(time_)))
     fileHandler.setFormatter(logFormatter)
     rootLogger.addHandler(fileHandler)
-    
+
     # args display
     if args.local_rank in [-1, 0]:
         for k, v in vars(args).items():
@@ -271,4 +291,36 @@ def main():
 
 if __name__ == '__main__':
     main()
+    # parser = argparse.ArgumentParser()
+    # parser.add_argument('--ckpt', default=None)
+    # parser.add_argument('--weight_decay', default=1e-5, type=float)
+    # parser.add_argument('--batch_size', default=64, type=int)
+    # parser.add_argument('--seed', type=int, default=666, help='random seed')
+    # parser.add_argument('--learning_rate', default=3e-5, type=float)
+    # parser.add_argument('--num_train_epochs', default=25, type=int)
+    # parser.add_argument('--logging_per_epoch', default=1, type=int)
+    # parser.add_argument('--early_stopping', default=5, type=int)
+    # parser.add_argument('--warmup_proportion', default=0.1, type=float,
+    #                     help="Proportion of training to perform linear learning rate warmup for,E.g., 0.1=10% of training.")
+    # parser.add_argument("--adam_epsilon", default=1e-8, type=float,
+    #                     help="Epsilon for Adam optimizer.")
+    # parser.add_argument("--gradient_accumulation_steps", type=int, default=1,
+    #                     help="Number of updates steps to accumulate before performing a backward/update pass.")
+    # parser.add_argument("--max_grad_norm", default=1.0, type=float,
+    #                     help="Max gradient norm.")
+    # parser.add_argument("--eval_max_length", default=500, type=int,
+    #                     help="Eval max length.")
+    # parser.add_argument("--beam_size", default=1, type=int,
+    #                     help="Beam size for inference.")
+    # parser.add_argument('--local_rank', default=-1, type=int,
+    #                 help='node rank for distributed training')
+    # parser.add_argument('--port', default=12355, type=int)
+    # args = parser.parse_args()
+    # args.input_dir = './exp_files/kqapro/test/'
+    # args.output_dir = './exp_results/kqapro/test/'
+    # args.model_name_or_path = '../Unified_IR/bart-base/'
+    # args.config = './data/kqapro/config.py'
+    # args.n_gpus = 1
+    # seed_everything(args.seed)
+    # train(args)
 

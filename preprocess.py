@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import pickle
 import argparse
@@ -8,12 +9,14 @@ import importlib.util
 
 from transformers import AutoTokenizer, set_seed
 
-def encode_dataset(dataset, tokenizer, vocab=None):
+def encode_dataset(args, dataset, tokenizer, vocab=None):
     inputs = []
     targets = []
     choices = []
     answers = []
-    
+    if args.customized:
+        intermediate_targets = []
+
     for item in tqdm(dataset):
         inputs.append(item['input'])
         targets.append(item['target'])
@@ -22,8 +25,13 @@ def encode_dataset(dataset, tokenizer, vocab=None):
             answers.append(vocab['answer_token_to_idx'].get(item['answer']))
         elif 'domain' in item.keys():
             answers.append(item['domain'])
-        
-    sequences = inputs + targets
+        if args.customized:
+            intermediate_targets.append(extract_first_order_syntax(item['ir']))
+
+    if args.customized:
+        sequences = inputs + intermediate_targets + targets
+    else:    
+        sequences = inputs + targets
     encoded_inputs = tokenizer(sequences, padding = True)
     
     max_seq_length = len(encoded_inputs['input_ids'][0])
@@ -35,11 +43,21 @@ def encode_dataset(dataset, tokenizer, vocab=None):
     
     target_ids = tokenizer.batch_encode_plus(targets, max_length = max_seq_length, padding='max_length', truncation = True)
     target_ids = np.array(target_ids['input_ids'], dtype = np.int32)
+
+    if args.customized:
+        intermediate_target_ids = tokenizer.batch_encode_plus(intermediate_targets, max_length = max_seq_length, padding='max_length', truncation = True)
+        intermediate_target_ids = np.array(intermediate_target_ids['input_ids'], dtype = np.int32)
     
     choices = np.array(choices, dtype = np.int32) if choices else np.array([0]*len(inputs), dtype = np.int32)
     answers = np.array(answers) if answers else np.array([0]*len(inputs), dtype = np.int32)
     
-    return source_ids, source_mask, target_ids, choices, answers
+    if args.customized:
+        return source_ids, source_mask, intermediate_target_ids, target_ids, choices, answers
+    else:
+       return source_ids, source_mask, target_ids, choices, answers
+
+def extract_first_order_syntax(ir):
+    return " ".join(re.findall(r"(?<=\<[A-Z]\>)[^\<\>]*(?=\<\/[A-Z]\>)", ir))
 
 def main():
     parser = argparse.ArgumentParser()
@@ -48,7 +66,7 @@ def main():
     parser.add_argument('--config', required=True)
     parser.add_argument('--model_name_or_path', required=True)
 
-    parser.add_argument('--reorder', action='store_true')
+    parser.add_argument('--customized', action='store_true')
     args = parser.parse_args()
     set_seed(666)
 
@@ -75,8 +93,7 @@ def main():
     
     for name, dataset in zip(('train', 'val', 'test'), (train_set, val_set, test_set)):
         print('Encode {} set'.format(name))
-        outputs = encode_dataset(dataset, tokenizer, vocab)
-        assert len(outputs) == 5
+        outputs = encode_dataset(args, dataset, tokenizer, vocab)
         with open(os.path.join(args.output_dir, '{}.pt'.format(name)), 'wb') as f:
             for o in outputs:
                 pickle.dump(o, f)
