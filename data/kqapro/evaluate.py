@@ -78,10 +78,10 @@ def post_process(text):
 def evaluate(args, given_answer, outputs, kb):
     count, correct = 0, 0
     pred_answers = []
-
     for a, s in tqdm(zip(given_answer, outputs)):
+        s = post_process(s)
         pred_answer = get_sparql_answer(s, kb)
-        if pred_answer == None:
+        if pred_answer is None:
             pred_answer = 'no'
         is_match = whether_equal(a, pred_answer)
         if is_match:

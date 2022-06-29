@@ -152,7 +152,6 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
 
         Returns:
         """
-        tok = AutoTokenizer.from_pretrained('../../../../ldata/sjd/bart-base/')
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if labels is not None:
@@ -191,7 +190,6 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
         masked_intermediate_lm_loss = None
         if intermediate_labels is not None:
             intermediate_loss_fct = CrossEntropyLoss()
-            st = time()
             _, supervised_len = torch.where(intermediate_labels == 2)
             supervised_pos = supervised_len.repeat((intermediate_lm_logits.size()[1], 1)).T
             all_pos = torch.arange(
@@ -217,8 +215,8 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
             logits=lm_logits,
             # intermediate_logits=intermediate_lm_logits,
             past_key_values=outputs.past_key_values,
-            # decoder_hidden_states=outputs.decoder_hidden_states,
-            decoder_hidden_states=intermediate_lm_logits,
+            decoder_hidden_states=outputs.decoder_hidden_states,
+            # decoder_hidden_states=intermediate_lm_logits,
             decoder_attentions=outputs.decoder_attentions,
             cross_attentions=outputs.cross_attentions,
             encoder_last_hidden_state=outputs.encoder_last_hidden_state,

@@ -5,6 +5,7 @@ data/agenda/
 data/*/data*/
 data/*/evaluator*/
 exp_*/
+new_exp_*/
 
 *.ipynb
 *.gz

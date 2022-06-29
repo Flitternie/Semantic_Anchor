@@ -56,6 +56,9 @@ def inference(args):
     model = model.to(device)
 
     acc, outputs = validate(args, model, test_loader, device, tokenizer)
+    with open("output.txt", "w") as f:
+        for output in outputs:
+            f.write(output + "\n")
 
             
 
