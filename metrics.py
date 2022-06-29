@@ -4,12 +4,18 @@ import numpy as np
 from tqdm import tqdm
 from utils.load_kb import DataForSPARQL
 import logging
+import importlib.util
 
 def evaluate_kqapro(args, given_answer, outputs):
     # evaluate on KQAPRO dataset
     kb = DataForSPARQL(os.path.join("./data/kqapro/data/", 'kb.json'))
-    from data.kqapro.evaluate import evaluate 
-    return evaluate(args, given_answer, outputs, kb)
+    try:
+        spec = importlib.util.spec_from_file_location("config", args.config)
+        config = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(config)
+    except:
+        raise Exception('Error loading config file')
+    return config.evaluate(args, given_answer, outputs, kb)
 
 def evaluate_webnlg(args, outputs):
     # evaluate on WebNLG dataset
@@ -18,13 +24,23 @@ def evaluate_webnlg(args, outputs):
         data_split = 'test_both' if args.inference else 'val'
     except:
         data_split = 'val'
-    from data.webnlg.evaluate import evaluate
-    return evaluate(args, data_dir, outputs, data_split)
+    try:
+        spec = importlib.util.spec_from_file_location("config", args.config)
+        config = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(config)
+    except:
+        raise Exception('Error loading config file')
+    return config.evaluate(args, data_dir, outputs, data_split)
 
 def evaluate_webnlg_reverse(args, outputs, targets):
     # evaluate on WebNLG-reverse dataset
-    from data.webnlg_reverse.evaluate import evaluate
-    return evaluate(args, outputs, targets)
+    try:
+        spec = importlib.util.spec_from_file_location("config", args.config)
+        config = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(config)
+    except:
+        raise Exception('Error loading config file')
+    return config.evaluate(args, outputs, targets)
 
 def evaluate_agenda(args, outputs,):
     data_dir = './data/agenda/data/'
@@ -32,12 +48,22 @@ def evaluate_agenda(args, outputs,):
         data_split = 'test' if args.inference else 'val'
     except:
         data_split = 'val'
-    from data.agenda.evaluate import evaluate
-    return evaluate(args, data_dir, outputs, data_split)
+    try:
+        spec = importlib.util.spec_from_file_location("config", args.config)
+        config = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(config)
+    except:
+        raise Exception('Error loading config file')
+    return config.evaluate(args, data_dir, outputs, data_split)
 
 def evaluate_overnight(args, outputs, targets, domains):
-    from data.overnight.evaluate import evaluate
-    return evaluate(args, outputs, targets, domains)
+    try:
+        spec = importlib.util.spec_from_file_location("config", args.config)
+        config = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(config)
+    except:
+        raise Exception('Error loading config file')
+    return config.evaluate(args, outputs, targets, domains)
 
 def evaluate(outputs, targets):
     assert len(outputs) == len(targets)

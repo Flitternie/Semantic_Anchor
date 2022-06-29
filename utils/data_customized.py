@@ -23,8 +23,8 @@ def collate(batch):
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs):
-            self.source_ids, self.source_mask, self.intermediate_target_ids, self.target_ids, self.choices, self.answers = inputs
-            self.is_test = len(self.answers)==0
+        self.source_ids, self.source_mask, self.intermediate_target_ids, self.target_ids, self.choices, self.answers = inputs
+        self.is_test = len(self.answers)==0
         
     def __getitem__(self, index):
         source_ids = torch.LongTensor(self.source_ids[index])
