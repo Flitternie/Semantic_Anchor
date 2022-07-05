@@ -9,6 +9,7 @@ new_exp_*/
 
 *.ipynb
 *.gz
+*.txt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

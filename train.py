@@ -291,37 +291,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    # parser = argparse.ArgumentParser()
-    # parser.add_argument('--ckpt', default=None)
-    # parser.add_argument('--weight_decay', default=1e-5, type=float)
-    # parser.add_argument('--batch_size', default=32, type=int)
-    # parser.add_argument('--seed', type=int, default=42, help='random seed')
-    # parser.add_argument('--learning_rate', default=3e-5, type=float)
-    # parser.add_argument('--num_train_epochs', default=25, type=int)
-    # parser.add_argument('--logging_per_epoch', default=1, type=int)
-    # parser.add_argument('--early_stopping', default=5, type=int)
-    # parser.add_argument('--warmup_proportion', default=0.1, type=float,
-    #                     help="Proportion of training to perform linear learning rate warmup for,E.g., 0.1=10% of training.")
-    # parser.add_argument("--adam_epsilon", default=1e-8, type=float,
-    #                     help="Epsilon for Adam optimizer.")
-    # parser.add_argument("--gradient_accumulation_steps", type=int, default=1,
-    #                     help="Number of updates steps to accumulate before performing a backward/update pass.")
-    # parser.add_argument("--max_grad_norm", default=1.0, type=float,
-    #                     help="Max gradient norm.")
-    # parser.add_argument("--eval_max_length", default=500, type=int,
-    #                     help="Eval max length.")
-    # parser.add_argument("--beam_size", default=1, type=int,
-    #                     help="Beam size for inference.")
-    # parser.add_argument('--local_rank', default=-1, type=int,
-    #                 help='node rank for distributed training')
-    # parser.add_argument('--port', default=12355, type=int)
-    # args = parser.parse_args()
-    # args.input_dir = './new_exp_files/kqapro/'
-    # args.output_dir = './new_exp_results/kqapro/'
-    # args.model_name_or_path = '../bart-base/'
-    # args.config = './data/kqapro/config.py'
-    # args.customized = True
-    # args.n_gpus = 1
-    # seed_everything(args.seed)
-    # train(args)
-

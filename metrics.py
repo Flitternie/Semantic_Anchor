@@ -115,13 +115,23 @@ def validate(args, model, data, device, tokenizer):
 
         assert len(all_outputs) == len(all_targets) 
 
-        outputs = [tokenizer.decode(output_id, skip_special_tokens = True, clean_up_tokenization_spaces = True) for output_id in all_outputs]
-        targets = [tokenizer.decode(target_id, skip_special_tokens = True, clean_up_tokenization_spaces = True) for target_id in all_targets]
+        if 'overnight' in args.input_dir:
+            outputs = [tokenizer.decode(output_id, skip_special_tokens = True, clean_up_tokenization_spaces = False) for output_id in all_outputs]
+        else:
+            outputs = [tokenizer.decode(output_id, skip_special_tokens = True, clean_up_tokenization_spaces = True) for output_id in all_outputs]
+        if 'overnight' in args.input_dir:
+            targets = [tokenizer.decode(target_id, skip_special_tokens = True, clean_up_tokenization_spaces = False) for target_id in all_targets]
+        else:
+            targets = [tokenizer.decode(target_id, skip_special_tokens = True, clean_up_tokenization_spaces = True) for target_id in all_targets]
+        
         print("Target sample sequence: %s " % targets[-1])
         print("Output sample sequence: %s " % outputs[-1])
-        if args.customized:
-            all_intermediate_targets = [tokenizer.decode(target_id, skip_special_tokens = True, clean_up_tokenization_spaces = True) for target_id in all_intermediate_targets]
         
+        if args.customized:
+            if 'overnight' in args.input_dir:
+                all_intermediate_targets = [tokenizer.decode(target_id, skip_special_tokens = True, clean_up_tokenization_spaces = False) for target_id in all_intermediate_targets]
+            else:
+                all_intermediate_targets = [tokenizer.decode(target_id, skip_special_tokens = True, clean_up_tokenization_spaces = True) for target_id in all_intermediate_targets]
         try:
             given_answer = [[data.vocab['answer_idx_to_token'][a] for a in [al]] for al in all_answers]
         except Exception as e:
@@ -140,6 +150,6 @@ def validate(args, model, data, device, tokenizer):
     elif 'overnight' in args.input_dir:
         lf_matching = evaluate_overnight(args, outputs, targets, all_answers)
     if args.local_rank in [-1, 0]:
-        logging.info('Execution accuracy: {}, String matching accuracy: {}'.format(lf_matching, str_matching))
+        logging.info("Execution accuracy: {}, String matching accuracy: {}".format(lf_matching, str_matching))
 
     return lf_matching, outputs

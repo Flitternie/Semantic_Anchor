@@ -4,17 +4,13 @@ import argparse
 import sys
 import importlib.util
 
-from utils.misc import MetricLogger, seed_everything, ProgressBar
-from utils.load_kb import DataForSPARQL
-
 from transformers import AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer
+from utils.misc import seed_everything
 from model import CustomizedBartForConditionalGeneration
 
-import torch.optim as optim
 import logging
 import time
-from utils.lr_scheduler import get_linear_schedule_with_warmup
-import re
+from metrics import validate
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)-8s %(message)s')
 logFormatter = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s')
@@ -24,10 +20,8 @@ warnings.simplefilter("ignore") # hide warnings that caused by invalid sparql qu
 
 def inference(args):
     if args.customized:
-        from metrics_new import validate
-        from utils.data_new import DataLoader
+        from utils.data_customized import DataLoader
     else:
-        from metrics import validate
         from utils.data import DataLoader
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
