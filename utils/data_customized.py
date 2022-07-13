@@ -14,16 +14,17 @@ def collate(batch):
     source_mask = torch.stack(batch[1])
     choices = torch.stack(batch[2])
     if batch[-1][0] is None:
-        intermediate_target_ids, target_ids, answer = None, None, None
+        intermediate_target_ids, intermediate_target_mask, target_ids, answer = None, None, None, None
     else:
         intermediate_target_ids = torch.stack(batch[3])
-        target_ids = torch.stack(batch[4])
-        answer = torch.cat(batch[5])
-    return source_ids, source_mask, choices, intermediate_target_ids, target_ids, answer
+        intermediate_target_mask = torch.stack(batch[4])
+        target_ids = torch.stack(batch[5])
+        answer = torch.cat(batch[6])
+    return source_ids, source_mask, choices, intermediate_target_ids, intermediate_target_mask, target_ids, answer
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs):
-        self.source_ids, self.source_mask, self.intermediate_target_ids, self.target_ids, self.choices, self.answers = inputs
+        self.source_ids, self.source_mask, self.intermediate_target_ids, self.intermediate_target_mask, self.target_ids, self.choices, self.answers = inputs
         self.is_test = len(self.answers)==0
         
     def __getitem__(self, index):
@@ -31,13 +32,14 @@ class Dataset(torch.utils.data.Dataset):
         source_mask = torch.LongTensor(self.source_mask[index])
         choices = torch.LongTensor(self.choices[index])
         intermediate_target_ids = torch.LongTensor(self.intermediate_target_ids[index])
+        intermediate_target_mask = torch.LongTensor(self.intermediate_target_mask[index])
         if self.is_test:
             target_ids = None
             answer = None
         else:
             target_ids = torch.LongTensor(self.target_ids[index])
             answer = torch.LongTensor([self.answers[index]])
-        return source_ids, source_mask, choices, intermediate_target_ids, target_ids, answer
+        return source_ids, source_mask, choices, intermediate_target_ids, intermediate_target_mask, target_ids, answer
 
     def __len__(self):
         return len(self.source_ids)
@@ -47,7 +49,7 @@ class DataLoader(torch.utils.data.DataLoader):
         vocab = load_vocab(vocab_json)
         
         inputs = []
-        input_len = 6
+        input_len = 7
         with open(question_pt, 'rb') as f:
             for _ in range(input_len):
                 inputs.append(pickle.load(f))
@@ -64,7 +66,7 @@ def prepare_dataset(vocab_json, question_pt, training=False):
     vocab = load_vocab(vocab_json)
     
     inputs = []
-    input_len = 6 
+    input_len = 7
     with open(question_pt, 'rb') as f:
         for _ in range(input_len):
             inputs.append(pickle.load(f))

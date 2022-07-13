@@ -46,7 +46,7 @@ def train(args):
         train_loader = DistributedDataLoader(train_dataset, train_vocab, args.batch_size//args.n_gpus, train_sampler)
     else:
         train_loader = DataLoader(vocab_json, train_pt, args.batch_size, training=True)
-    val_loader = DataLoader(vocab_json, val_pt, 2*args.batch_size//args.n_gpus, training=False)
+    val_loader = DataLoader(vocab_json, val_pt, args.batch_size//args.n_gpus, training=False)
     
     if args.local_rank in [-1, 0]:
         logging.info("Create model.........")
@@ -118,7 +118,7 @@ def train(args):
     best_acc, current_acc = 0.0, 0.0
     model.zero_grad()
     if args.local_rank in [-1, 0]:
-        current_acc, _ = validate(args, model, val_loader, device, tokenizer)
+        # current_acc, _ = validate(args, model, val_loader, device, tokenizer)
         print("Current performance on validation set: %f" % (current_acc))
     
     save_steps = round(len(train_loader.dataset)/args.batch_size) // args.logging_per_epoch
@@ -140,10 +140,11 @@ def train(args):
             pad_token_id = tokenizer.pad_token_id
 
             if args.customized:
-                source_ids, source_mask, intermediate, y = batch[0], batch[1], batch[-3], batch[-2]
+                source_ids, source_mask, intermediate, intermediate_mask, y = batch[0], batch[1], batch[-4], batch[-3], batch[-2]
                 intermediate_labels = intermediate[:, 1:].clone()
                 intermediate_labels[intermediate[:, 1:] == pad_token_id] = -100
-           
+                
+                intermediate_masks = intermediate_mask[:, 1:].clone()
                 # alpha = 1 - (args.num_train_epochs - epoch_i) / args.num_train_epochs
                 alpha = ( 1 + ( args.num_train_epochs // 2 - epoch_i ) / args.num_train_epochs // 2 ) ** 2 / 2
                 # alpha = ( ( args.num_train_epochs - epoch_i ) / args.num_train_epochs ) ** 2
@@ -154,13 +155,16 @@ def train(args):
             labels[y[:, 1:] == pad_token_id] = -100
             
             if args.customized:
+                assert 0 < args.intermediate_layer <= 6
                 inputs = {
                     "input_ids": source_ids.to(device),
                     "attention_mask": source_mask.to(device),
                     "decoder_input_ids": y_ids.to(device),
                     "intermediate_labels": intermediate_labels.to(device),
+                    "intermediate_masks": intermediate_masks.to(device),
                     "labels": labels.to(device),
-                    "alpha": alpha
+                    "alpha": alpha,
+                    "intermediate_decoder_layer": args.intermediate_layer
                 }
             else:
                 inputs = {
@@ -255,6 +259,7 @@ def main():
 
     # special parameters
     parser.add_argument('--customized', action='store_true')
+    parser.add_argument("--intermediate_layer", type=int)
     
     parser.add_argument('--local_rank', default=-1, type=int,
                     help='node rank for distributed training')
