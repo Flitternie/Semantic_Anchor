@@ -41,12 +41,12 @@ def train(args):
     val_pt = os.path.join(args.input_dir, 'val.pt')
     
     if args.n_gpus > 1:
-        train_dataset, train_vocab = prepare_dataset(vocab_json, train_pt, training=True)
+        train_dataset, train_vocab = prepare_dataset(vocab_json, train_pt, training=True, hybrid=args.hybrid)
         train_sampler = DistributedSampler(train_dataset)
         train_loader = DistributedDataLoader(train_dataset, train_vocab, args.batch_size//args.n_gpus, train_sampler)
     else:
-        train_loader = DataLoader(vocab_json, train_pt, args.batch_size, training=True)
-    val_loader = DataLoader(vocab_json, val_pt, args.batch_size//args.n_gpus, training=False)
+        train_loader = DataLoader(vocab_json, train_pt, args.batch_size, training=True, hybrid=args.hybrid)
+    val_loader = DataLoader(vocab_json, val_pt, args.batch_size//args.n_gpus * 2, training=False, hybrid=args.hybrid)
     
     if args.local_rank in [-1, 0]:
         logging.info("Create model.........")
@@ -140,14 +140,23 @@ def train(args):
             pad_token_id = tokenizer.pad_token_id
 
             if args.customized:
-                source_ids, source_mask, intermediate, intermediate_mask, y = batch[0], batch[1], batch[-4], batch[-3], batch[-2]
+                if args.hybrid:
+                    assert len(batch) == 9
+                    source_ids, source_mask, extra_intermediate, extra_intermediate_mask, intermediate, intermediate_mask, y = batch[0], batch[1], batch[-6], batch[-5], batch[-4], batch[-3], batch[-2]
+                    extra_intermediate_labels = extra_intermediate[:, 1:].clone()
+                    extra_intermediate_labels[extra_intermediate[:, 1:] == pad_token_id] = -100
+                    extra_intermediate_masks = extra_intermediate_mask[:, 1:].clone()
+                else:
+                    source_ids, source_mask, intermediate, intermediate_mask, y = batch[0], batch[1], batch[-4], batch[-3], batch[-2]
                 intermediate_labels = intermediate[:, 1:].clone()
                 intermediate_labels[intermediate[:, 1:] == pad_token_id] = -100
-                
                 intermediate_masks = intermediate_mask[:, 1:].clone()
+
                 # alpha = 1 - (args.num_train_epochs - epoch_i) / args.num_train_epochs
-                alpha = ( 1 + ( args.num_train_epochs // 2 - epoch_i ) / args.num_train_epochs // 2 ) ** 2 / 2
-                # alpha = ( ( args.num_train_epochs - epoch_i ) / args.num_train_epochs ) ** 2
+                alpha = ( ( args.num_train_epochs - epoch_i ) / args.num_train_epochs ) ** 2
+                # alpha = ( 1 + ( args.num_train_epochs // 2 - epoch_i ) / args.num_train_epochs // 2 ) ** 2 / 2
+                alpha = alpha / 2 if args.hybrid else alpha
+
             else:
                 source_ids, source_mask, y = batch[0], batch[1], batch[-2]
             y_ids = y[:, :-1].contiguous()
@@ -155,7 +164,6 @@ def train(args):
             labels[y[:, 1:] == pad_token_id] = -100
             
             if args.customized:
-                assert 0 < args.intermediate_layer <= 6
                 inputs = {
                     "input_ids": source_ids.to(device),
                     "attention_mask": source_mask.to(device),
@@ -164,8 +172,10 @@ def train(args):
                     "intermediate_masks": intermediate_masks.to(device),
                     "labels": labels.to(device),
                     "alpha": alpha,
-                    "intermediate_decoder_layer": args.intermediate_layer
                 }
+                if args.hybrid:
+                    inputs["extra_intermediate_labels"] = extra_intermediate_labels.to(device)
+                    inputs["extra_intermediate_masks"] = extra_intermediate_masks.to(device)
             else:
                 inputs = {
                 "input_ids": source_ids.to(device),
@@ -189,9 +199,9 @@ def train(args):
                 global_step += 1
 
             if global_step % save_steps == 0 and args.local_rank in [-1, 0]:
-                    logging.info("Epoch %d loss: %.3f" % (epoch_i, loss_num))
-                    current_acc, _ = validate(args, model, val_loader, device, tokenizer)
-                # print("Current best performance on validation set: %f" % (current_acc))
+                logging.info("Epoch %d loss: %.3f" % (epoch_i, loss_num))
+                current_acc, _ = validate(args, model, val_loader, device, tokenizer)
+                print("Current best performance on validation set: %f" % (current_acc))
             
             if args.local_rank in [-1, 0] and save_steps > 0 and global_step % save_steps == 0 and current_acc > best_acc:
                 epochs_not_improving = 0
@@ -259,7 +269,7 @@ def main():
 
     # special parameters
     parser.add_argument('--customized', action='store_true')
-    parser.add_argument("--intermediate_layer", type=int)
+    parser.add_argument('--hybrid', action='store_true')
     
     parser.add_argument('--local_rank', default=-1, type=int,
                     help='node rank for distributed training')

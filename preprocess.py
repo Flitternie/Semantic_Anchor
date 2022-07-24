@@ -12,8 +12,9 @@ from transformers import AutoTokenizer, set_seed
 
 def get_key_info(ir: str):
     key_info = re.findall(r"(?<=\<[A-Z]\>)[^\<\>]*(?=\<\/[A-Z]\>)", ir)
+    key_info = [item.strip() for item in key_info]
     key_info += [item.replace(" ", "_") for item in key_info if item.islower()]
-    return key_info
+    return key_info + [" {}".format(item) for item in key_info] + ["{} ".format(item) for item in key_info]
 
 def extract_first_order_syntax(ir):
     return re.findall(r"(?<=\<[A-Z]\>)[^\<\>]*(?=\<\/[A-Z]\>)", ir)
@@ -117,10 +118,10 @@ def encode_dataset(args, dataset, tokenizer, vocab=None):
             for i in tqdm(range(len(intermediate_key_info))):
                 for j in range(len(intermediate_key_info[i])):
                     key_ids = tokenizer.encode(intermediate_key_info[i][j])[1:-1]
-                    mask_ids = get_mask_ids(key_ids, intermediate_long_target_mask[i])
-                    intermediate_long_target_mask[i][mask_ids] = 1
-                    # eos_pos = intermediate_target_ids[i].tolist().index(tokenizer.eos_token_id)
-                    # np.put(intermediate_target_mask[i], np.arange(eos_pos, len(intermediate_target_mask[i])), 1)
+                    mask_ids = get_mask_ids(key_ids, intermediate_long_target_ids[i])
+                    np.put(intermediate_long_target_mask[i], mask_ids, 1)
+                    # eos_pos = intermediate_long_target_ids[i].tolist().index(tokenizer.eos_token_id)
+                    # np.put(intermediate_long_target_mask[i], np.arange(eos_pos, len(intermediate_long_target_mask[i])), 1)
             
 
     choices = np.array(choices, dtype=np.int32) if choices else np.array([0]*len(inputs), dtype=np.int32)
@@ -143,9 +144,12 @@ def main():
     parser.add_argument('--model_name_or_path', required=True)
 
     parser.add_argument('--customized', action='store_true')
-    parser.add_argument('--supervision_form', required=True, choices=[None, 'long', 'short', 'hybrid'])
+    parser.add_argument('--supervision_form', choices=['long', 'short', 'hybrid'])
     args = parser.parse_args()
     set_seed(42)
+
+    if bool(args.customized) ^ bool(args.supervision_form):
+        raise ValueError("args.customized and args.supervision_form must be co-specified.")
 
     try:
         spec = importlib.util.spec_from_file_location("config", args.config)

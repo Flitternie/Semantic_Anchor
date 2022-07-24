@@ -82,6 +82,7 @@ def main():
     parser.add_argument('--alpha', default = 1e-4, type = float)
 
     parser.add_argument('--customized', action='store_true')
+    parser.add_argument('--hybrid', action='store_true')
 
     args = parser.parse_args()
     args.inference = True

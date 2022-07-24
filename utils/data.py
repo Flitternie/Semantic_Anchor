@@ -41,7 +41,7 @@ class Dataset(torch.utils.data.Dataset):
         return len(self.source_ids)
 
 class DataLoader(torch.utils.data.DataLoader):
-    def __init__(self, vocab_json, question_pt, batch_size, training=False):
+    def __init__(self, vocab_json, question_pt, batch_size, training=False, hybrid=False):
         vocab = load_vocab(vocab_json)
 
         inputs = []
