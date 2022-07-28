@@ -10,6 +10,7 @@ from graphq_ir.overnight.translator import Translator
 special_tokens = []
 overnight_domains = ['basketball', 'blocks', 'calendar', 'housing', 'publications', 'recipes', 'restaurants', 'socialnetwork']
 
+
 def load_data(args):
     print('Build kb vocabulary')
     vocab = {
@@ -29,6 +30,7 @@ def load_data(args):
     
     return train_set, val_set, test_set, vocab
 
+
 def read_overnight(path, domain_idx):
     ex_list = []
     infile = pd.read_csv(path, sep='\t')
@@ -39,6 +41,7 @@ def read_overnight(path, domain_idx):
     for ex in tqdm(ex_list):
         ex['ir'] = translator.to_ir(ex['target'])
     return ex_list
+
 
 def evaluate(args, outputs, targets, all_domains, *xargs):
     assert len(outputs) == len(targets)
