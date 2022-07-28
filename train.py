@@ -116,6 +116,8 @@ def train(args):
     
     tr_loss = 0.0
     best_acc, current_acc = 0.0, 0.0
+    alpha = 1
+
     model.zero_grad()
     if args.local_rank in [-1, 0]:
         # current_acc, _ = validate(args, model, val_loader, device, tokenizer)
@@ -123,8 +125,9 @@ def train(args):
     
     save_steps = round(len(train_loader.dataset)/args.batch_size) // args.logging_per_epoch
     epochs_not_improving = 0
-    
+
     for epoch_i in range(int(args.num_train_epochs)):
+        first_batch_intermediate_loss = 0.0
         if args.n_gpus > 1:
             train_loader.sampler.set_epoch(epoch_i)
         pbar = ProgressBar(n_total=len(train_loader), desc='Training')
@@ -146,14 +149,14 @@ def train(args):
                 
                 intermediate_masks = intermediate_mask[:, 1:].clone()
                 # alpha = 1 - (args.num_train_epochs - epoch_i) / args.num_train_epochs
-                alpha = ( 1 + ( args.num_train_epochs // 2 - epoch_i ) / args.num_train_epochs // 2 ) ** 2 / 2
+                # alpha = ( 1 + ( args.num_train_epochs // 2 - epoch_i ) / args.num_train_epochs // 2 ) ** 2 / 2
                 # alpha = ( ( args.num_train_epochs - epoch_i ) / args.num_train_epochs ) ** 2
             else:
                 source_ids, source_mask, y = batch[0], batch[1], batch[-2]
             y_ids = y[:, :-1].contiguous()
             labels = y[:, 1:].clone()
             labels[y[:, 1:] == pad_token_id] = -100
-            
+
             if args.customized:
                 assert 0 < args.intermediate_layer <= 6
                 inputs = {
@@ -177,10 +180,12 @@ def train(args):
             loss = outputs[0]
             if torch.cuda.device_count() > 1:
                 loss = loss.sum()
+
             loss.backward()
             loss_num = loss.item()
             pbar(step, {'loss': loss_num})
             tr_loss += loss_num
+
             if (step + 1) % args.gradient_accumulation_steps == 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
                 optimizer.step()
@@ -188,9 +193,64 @@ def train(args):
                 model.zero_grad()
                 global_step += 1
 
+
             if global_step % save_steps == 0 and args.local_rank in [-1, 0]:
-                    logging.info("Epoch %d loss: %.3f" % (epoch_i, loss_num))
-                    current_acc, _ = validate(args, model, val_loader, device, tokenizer)
+                # logging.info("Epoch %d loss: %.3f" % (epoch_i, loss_num))
+                if args.customized:
+                    deltas = []
+                    ad_opt = optim.AdamW(params=model.parameters(), lr=args.learning_rate, eps=args.adam_epsilon)
+                    print("Adjusting intermediate weights...")
+                    model.train()
+
+                    temp_train_loader = DataLoader(vocab_json, train_pt, 16, training=True)
+                    for ad_step, ad_batch in enumerate(temp_train_loader):
+                        if ad_step < args.sample_number:
+                            model.zero_grad()
+                            ad_batch = tuple(t.to(device) for t in ad_batch)
+                            pad_token_id = tokenizer.pad_token_id
+                            source_ids, source_mask, intermediate, intermediate_mask, y = ad_batch[0], ad_batch[1],\
+                                                                                          ad_batch[-4], ad_batch[-3],\
+                                                                                          ad_batch[-2]
+                            intermediate_labels = intermediate[:, 1:].clone()
+                            intermediate_labels[intermediate[:, 1:] == pad_token_id] = -100
+                            intermediate_masks = intermediate_mask[:, 1:].clone()
+                            y_ids = y[:, :-1].contiguous()
+                            labels = y[:, 1:].clone()
+                            labels[y[:, 1:] == pad_token_id] = -100
+                            inputs = {
+                                "input_ids": source_ids.to(device),
+                                "attention_mask": source_mask.to(device),
+                                "decoder_input_ids": y_ids.to(device),
+                                "intermediate_labels": intermediate_labels.to(device),
+                                "intermediate_masks": intermediate_masks.to(device),
+                                "labels": labels.to(device),
+                                "alpha": alpha,
+                                "intermediate_decoder_layer": args.intermediate_layer
+                            }
+                            outputs = model(**inputs)
+                            target_loss, intermediate_loss = outputs[-2], outputs[-1]
+                            if torch.cuda.device_count() > 1:
+                                target_loss = target_loss.sum()
+                                intermediate_loss = intermediate_loss.sum()
+
+                            intermediate_loss = intermediate_loss + 0 * target_loss  # to avoid unused param error
+                            intermediate_loss.backward()
+                            # torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                            ad_opt.step()
+                            model.zero_grad()
+                            new_outputs = model(**inputs)
+                            updated_target_loss = new_outputs[-2]
+                            if torch.cuda.device_count() > 1:
+                                updated_target_loss = updated_target_loss.sum()
+                            delta = target_loss.item() / updated_target_loss.item()
+                            deltas.append(delta)
+                            model.zero_grad()
+                        else:
+                            break
+                    alpha = max(alpha * sum(deltas) / len(deltas), 1.5)
+                    print("The new weight for intermediate loss: %f" % alpha)
+                current_acc, _ = validate(args, model, val_loader, device, tokenizer)
+
                 # print("Current best performance on validation set: %f" % (current_acc))
             
             if args.local_rank in [-1, 0] and save_steps > 0 and global_step % save_steps == 0 and current_acc > best_acc:
@@ -215,7 +275,7 @@ def train(args):
             
             if args.n_gpus > 1:
                 dist.barrier()
-        
+
         if 'cuda' in str(device):
             torch.cuda.empty_cache()
         if epochs_not_improving > args.early_stopping:
@@ -237,7 +297,7 @@ def main():
 
     # training parameters
     parser.add_argument('--weight_decay', default=1e-5, type=float)
-    parser.add_argument('--batch_size', default=128, type=int)
+    parser.add_argument('--batch_size', default=16, type=int)
     parser.add_argument('--seed', type=int, default=42, help='random seed')
     parser.add_argument('--learning_rate', default=3e-5, type=float)
     parser.add_argument('--num_train_epochs', default=25, type=int)
@@ -257,10 +317,15 @@ def main():
     parser.add_argument("--beam_size", default=1, type=int,
                         help="Beam size for inference.")
 
+    parser.add_argument("--sample_number", default=10, type=int)
+    parser.add_argument("--max_alpha", default=2, type=int)
+
+
     # special parameters
     parser.add_argument('--customized', action='store_true')
     parser.add_argument("--intermediate_layer", type=int)
-    
+
+
     parser.add_argument('--local_rank', default=-1, type=int,
                     help='node rank for distributed training')
     parser.add_argument('--port', default=12355, type=int)
