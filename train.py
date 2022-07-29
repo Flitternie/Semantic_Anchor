@@ -27,6 +27,7 @@ rootLogger = logging.getLogger()
 import warnings
 warnings.simplefilter("ignore") 
 
+
 def train(args):
     if args.customized:
         from utils.data_customized import DataLoader, DistributedDataLoader, prepare_dataset
@@ -146,8 +147,8 @@ def train(args):
                 source_ids, source_mask, intermediate, intermediate_mask, y = batch[0], batch[1], batch[-4], batch[-3], batch[-2]
                 intermediate_labels = intermediate[:, 1:].clone()
                 intermediate_labels[intermediate[:, 1:] == pad_token_id] = -100
-                
                 intermediate_masks = intermediate_mask[:, 1:].clone()
+
                 # alpha = 1 - (args.num_train_epochs - epoch_i) / args.num_train_epochs
                 # alpha = ( 1 + ( args.num_train_epochs // 2 - epoch_i ) / args.num_train_epochs // 2 ) ** 2 / 2
                 # alpha = ( ( args.num_train_epochs - epoch_i ) / args.num_train_epochs ) ** 2
@@ -193,23 +194,18 @@ def train(args):
                 model.zero_grad()
                 global_step += 1
 
-
-            if global_step % save_steps == 0 and args.local_rank in [-1, 0]:
-                # logging.info("Epoch %d loss: %.3f" % (epoch_i, loss_num))
+            if global_step % save_steps == 0:
                 if args.customized:
                     deltas = []
-                    ad_opt = optim.AdamW(params=model.parameters(), lr=args.learning_rate, eps=args.adam_epsilon)
                     print("Adjusting intermediate weights...")
                     model.train()
-
-                    temp_train_loader = DataLoader(vocab_json, train_pt, 16, training=True)
-                    for ad_step, ad_batch in enumerate(temp_train_loader):
+                    for ad_step, ad_batch in enumerate(train_loader):
                         if ad_step < args.sample_number:
                             model.zero_grad()
                             ad_batch = tuple(t.to(device) for t in ad_batch)
                             pad_token_id = tokenizer.pad_token_id
-                            source_ids, source_mask, intermediate, intermediate_mask, y = ad_batch[0], ad_batch[1],\
-                                                                                          ad_batch[-4], ad_batch[-3],\
+                            source_ids, source_mask, intermediate, intermediate_mask, y = ad_batch[0], ad_batch[1], \
+                                                                                          ad_batch[-4], ad_batch[-3], \
                                                                                           ad_batch[-2]
                             intermediate_labels = intermediate[:, 1:].clone()
                             intermediate_labels[intermediate[:, 1:] == pad_token_id] = -100
@@ -235,11 +231,10 @@ def train(args):
 
                             intermediate_loss = intermediate_loss + 0 * target_loss  # to avoid unused param error
                             intermediate_loss.backward()
-                            # torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-                            ad_opt.step()
+                            optimizer.step()
                             model.zero_grad()
-                            new_outputs = model(**inputs)
-                            updated_target_loss = new_outputs[-2]
+                            outputs = model(**inputs)
+                            updated_target_loss = outputs[-2]
                             if torch.cuda.device_count() > 1:
                                 updated_target_loss = updated_target_loss.sum()
                             delta = target_loss.item() / updated_target_loss.item()
@@ -247,8 +242,11 @@ def train(args):
                             model.zero_grad()
                         else:
                             break
-                    alpha = max(alpha * sum(deltas) / len(deltas), 1.5)
+                    alpha = max((alpha * sum(deltas) / len(deltas)) ** 0.5, args.max_alpha)
                     print("The new weight for intermediate loss: %f" % alpha)
+
+            if global_step % save_steps == 0 and args.local_rank in [-1, 0]:
+                # logging.info("Epoch %d loss: %.3f" % (epoch_i, loss_num))
                 current_acc, _ = validate(args, model, val_loader, device, tokenizer)
 
                 # print("Current best performance on validation set: %f" % (current_acc))
@@ -318,7 +316,7 @@ def main():
                         help="Beam size for inference.")
 
     parser.add_argument("--sample_number", default=10, type=int)
-    parser.add_argument("--max_alpha", default=2, type=int)
+    parser.add_argument("--max_alpha", default=1.5, type=int)
 
 
     # special parameters
