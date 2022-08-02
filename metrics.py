@@ -99,18 +99,14 @@ def validate(args, model, data, device, tokenizer):
     if args.customized:
         all_intermediate_outputs = []
         all_intermediate_targets = []
-        logging.info(
-            nn.functional.softmax(model.intermediate_weighting).cpu().tolist())  # weighting for intermediate layers
+        # logging.info(
+            # nn.functional.softmax(model.intermediate_weighting).cpu().tolist())  # weighting for intermediate layers
 
     with torch.no_grad():
         for batch in tqdm(data, total=len(data)):
             if args.customized:
-                if args.hybrid:
-                    source_ids, source_mask, _, extra_intermediate_target_ids, extra_intermediate_target_mask, intermediate_target_ids, intermediate_target_mask, target_ids, answers = [
-                        x.to(device) for x in batch]
-                else:
-                    source_ids, source_mask, _, intermediate_target_ids, intermediate_target_mask, target_ids, answers = [
-                        x.to(device) for x in batch]
+                source_ids, source_mask, _, intermediate_target_ids, intermediate_target_mask, target_ids, answers = [
+                    x.to(device) for x in batch]
             else:
                 source_ids, source_mask, _, target_ids, answers = [x.to(device) for x in batch]
 

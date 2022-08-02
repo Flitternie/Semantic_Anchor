@@ -9,9 +9,7 @@ from transformers.modeling_outputs import BaseModelOutput, Seq2SeqModelOutput, S
 from transformers.models.bart.modeling_bart import BartModel, BartPretrainedModel, shift_tokens_right
 from transformers.models.bart.configuration_bart import BartConfig
 from transformers.file_utils import ModelOutput
-from transformers import AutoTokenizer
 
-from time import time
 
 @dataclass
 class CustomizedSeq2SeqLMOutput(Seq2SeqLMOutput):
@@ -39,9 +37,10 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
 
         self.register_buffer("final_logits_bias", torch.zeros((1, self.model.shared.num_embeddings)))
         self.lm_head = nn.Linear(config.d_model, self.model.shared.num_embeddings, bias=False)
-        
-        # add extra language model head layer for intermediate supervision
+
+        # add extra language model head layers for intermediate supervision
         self.intermediate_lm_head = nn.Linear(config.d_model, self.model.shared.num_embeddings, bias=False)
+        self.intermediate_weighting = nn.parameter.Parameter(torch.ones(5), requires_grad=True)
 
         self.init_weights()
 
@@ -90,7 +89,7 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
             extra_bias = torch.zeros((1, new_num_tokens - old_num_tokens), device=self.final_logits_bias.device)
             new_bias = torch.cat([self.final_logits_bias, extra_bias], dim=1)
         self.register_buffer("final_logits_bias", new_bias)
-    
+
     def tie_weights(self):
         """
         Tie the weights between the input embeddings and the output embeddings.
@@ -116,38 +115,40 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
 
     def get_output_embeddings(self):
         return self.lm_head
-    
+
     def get_intermediate_output_embeddings(self):
         return self.intermediate_lm_head
 
     def set_output_embeddings(self, new_embeddings):
         self.lm_head = new_embeddings
-    
+
     def set_intermediate_output_embeddings(self, new_embeddings):
         self.intermediate_lm_head = new_embeddings
 
     def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        decoder_input_ids=None,
-        decoder_attention_mask=None,
-        head_mask=None,
-        decoder_head_mask=None,
-        cross_attn_head_mask=None,
-        encoder_outputs=None,
-        past_key_values=None,
-        inputs_embeds=None,
-        decoder_inputs_embeds=None,
-        labels=None,
-        intermediate_labels=None,
-        intermediate_masks=None,
-        use_cache=None,
-        output_attentions=None,
-        output_hidden_states=True,
-        return_dict=None,
-        alpha=0.0,
-        intermediate_decoder_layer=-1,
+            self,
+            input_ids=None,
+            attention_mask=None,
+            decoder_input_ids=None,
+            decoder_attention_mask=None,
+            head_mask=None,
+            decoder_head_mask=None,
+            cross_attn_head_mask=None,
+            encoder_outputs=None,
+            past_key_values=None,
+            inputs_embeds=None,
+            decoder_inputs_embeds=None,
+            labels=None,
+            intermediate_labels=None,
+            intermediate_masks=None,
+            use_cache=None,
+            output_attentions=None,
+            output_hidden_states=True,
+            return_dict=None,
+            alpha=0.0,
+            extra_intermediate_labels=None,
+            extra_intermediate_masks=None,
+            extra_intermediate_decoder_layer=-1,
     ):
         r"""
         labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
@@ -184,33 +185,40 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
         )
 
         lm_logits = self.lm_head(outputs[0]) + self.final_logits_bias
-        masked_lm_loss = None        
+
+        tar_loss = None
         if labels is not None:
             loss_fct = CrossEntropyLoss()
-            masked_lm_loss = loss_fct(lm_logits.view(-1, self.config.vocab_size), labels.view(-1))
-        
+            tar_loss = loss_fct(lm_logits.view(-1, self.config.vocab_size), labels.view(-1))
+
         # add extra language model logits for computing intermediate loss
-        intermediate_lm_logits = self.lm_head(outputs['decoder_hidden_states'][intermediate_decoder_layer]) + self.final_logits_bias
+        intermediate_decoder_weights = nn.functional.softmax(self.intermediate_weighting, dim=0)
+        intermediate_decoder_outputs = nn.functional.linear(torch.stack(outputs['decoder_hidden_states'][1:6], dim=-1),
+                                                            intermediate_decoder_weights)
+        intermediate_lm_logits = self.intermediate_lm_head(intermediate_decoder_outputs) + self.final_logits_bias
 
         masked_intermediate_lm_loss = None
-        masked_overall_lm_loss = None
         if intermediate_labels is not None:
             intermediate_loss_fct = CrossEntropyLoss()
-            
+
             new_intermediate_labels = intermediate_labels.clone()
             new_intermediate_labels[new_intermediate_labels == -100] = 1
             one_hot_intermediate_labels = F.one_hot(new_intermediate_labels, num_classes=self.config.vocab_size).float()
             intermediate_masks = intermediate_masks.bool().unsqueeze(-1).repeat(1, 1, self.config.vocab_size)
-            new_intermediate_lm_logits = torch.where(intermediate_masks, intermediate_lm_logits, one_hot_intermediate_labels)
-            masked_intermediate_lm_loss = intermediate_loss_fct(new_intermediate_lm_logits.view(-1, self.config.vocab_size), new_intermediate_labels.view(-1))
-            masked_overall_lm_loss = masked_lm_loss + alpha * masked_intermediate_lm_loss
+            new_intermediate_lm_logits = torch.where(intermediate_masks, intermediate_lm_logits,
+                                                     one_hot_intermediate_labels)
+            masked_intermediate_lm_loss = intermediate_loss_fct(
+                new_intermediate_lm_logits.view(-1, self.config.vocab_size), new_intermediate_labels.view(-1))
+            masked_lm_loss = tar_loss + alpha * masked_intermediate_lm_loss
+        else:
+            masked_lm_loss = tar_loss
 
         if not return_dict:
-            output = (lm_logits,) + (intermediate_lm_logits,) + outputs[1:]
-            return ((masked_overall_lm_loss,) + output) if masked_overall_lm_loss is not None else output
+            output = (lm_logits,) + outputs[1:]
+            return ((masked_lm_loss) + output) if masked_lm_loss is not None else output
 
         return CustomizedSeq2SeqLMOutput(
-            loss=masked_overall_lm_loss,
+            loss=masked_lm_loss,
             logits=lm_logits,
             intermediate_logits=intermediate_lm_logits,
             past_key_values=outputs.past_key_values,
@@ -220,21 +228,21 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
             encoder_last_hidden_state=outputs.encoder_last_hidden_state,
             encoder_hidden_states=outputs.encoder_hidden_states,
             encoder_attentions=outputs.encoder_attentions,
-            tar_loss=masked_lm_loss,
+            tar_loss=tar_loss,
             intermediate_loss=masked_intermediate_lm_loss,
         )
 
     def prepare_inputs_for_generation(
-        self,
-        decoder_input_ids,
-        past=None,
-        attention_mask=None,
-        head_mask=None,
-        decoder_head_mask=None,
-        cross_attn_head_mask=None,
-        use_cache=None,
-        encoder_outputs=None,
-        **kwargs
+            self,
+            decoder_input_ids,
+            past=None,
+            attention_mask=None,
+            head_mask=None,
+            decoder_head_mask=None,
+            cross_attn_head_mask=None,
+            use_cache=None,
+            encoder_outputs=None,
+            **kwargs
     ):
         # cut decoder_input_ids if past is used
         if past is not None:
