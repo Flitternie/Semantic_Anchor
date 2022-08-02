@@ -159,7 +159,6 @@ def train(args):
             labels[y[:, 1:] == pad_token_id] = -100
 
             if args.customized:
-                assert 0 < args.intermediate_layer <= 6
                 inputs = {
                     "input_ids": source_ids.to(device),
                     "attention_mask": source_mask.to(device),
@@ -168,7 +167,6 @@ def train(args):
                     "intermediate_masks": intermediate_masks.to(device),
                     "labels": labels.to(device),
                     "alpha": alpha,
-                    "intermediate_decoder_layer": args.intermediate_layer
                 }
             else:
                 inputs = {
@@ -221,7 +219,6 @@ def train(args):
                                 "intermediate_masks": intermediate_masks.to(device),
                                 "labels": labels.to(device),
                                 "alpha": alpha,
-                                "intermediate_decoder_layer": args.intermediate_layer
                             }
                             outputs = model(**inputs)
                             target_loss, intermediate_loss = outputs[-2], outputs[-1]
@@ -240,16 +237,25 @@ def train(args):
                             delta = target_loss.item() / updated_target_loss.item()
                             deltas.append(delta)
                             model.zero_grad()
-                        else:
-                            break
-                    alpha = max((alpha * sum(deltas) / len(deltas)) ** 0.5, args.max_alpha)
-                    print("The new weight for intermediate loss: %f" % alpha)
+
+                    assert len(deltas) == args.sample_number
+                    deltas = torch.tensor(deltas).cuda(args.local_rank)
+                    s = torch.cuda.Stream()
+                    handle = dist.all_reduce(deltas, async_op=True)
+                    handle.wait()
+                    with torch.cuda.stream(s):
+                        s.wait_stream(torch.cuda.default_stream())
+                        deltas = deltas / args.n_gpus
+
+                    alpha = min(alpha * ((sum(deltas) / len(deltas))**args.adjustment_step), args.max_alpha)
+                    if args.local_rank in [-1, 0]:
+                        logging.info("The updated alpha is: %f" % alpha)
 
             if global_step % save_steps == 0 and args.local_rank in [-1, 0]:
                 # logging.info("Epoch %d loss: %.3f" % (epoch_i, loss_num))
                 current_acc, _ = validate(args, model, val_loader, device, tokenizer)
-
                 # print("Current best performance on validation set: %f" % (current_acc))
+
             
             if args.local_rank in [-1, 0] and save_steps > 0 and global_step % save_steps == 0 and current_acc > best_acc:
                 epochs_not_improving = 0
@@ -315,13 +321,11 @@ def main():
     parser.add_argument("--beam_size", default=1, type=int,
                         help="Beam size for inference.")
 
-    parser.add_argument("--sample_number", default=10, type=int)
-    parser.add_argument("--max_alpha", default=1.5, type=int)
-
-
     # special parameters
     parser.add_argument('--customized', action='store_true')
-    parser.add_argument("--intermediate_layer", type=int)
+    parser.add_argument('--adjustment_step', default=2, type=float)
+    parser.add_argument("--sample_number", default=10, type=int)
+    parser.add_argument("--max_alpha", default=1.5, type=float)
 
 
     parser.add_argument('--local_rank', default=-1, type=int,
