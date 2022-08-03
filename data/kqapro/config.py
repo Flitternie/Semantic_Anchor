@@ -4,7 +4,8 @@ import json
 from itertools import chain
 from tqdm import tqdm
 from datetime import date
-from data.kqapro.sparql_engine import get_sparql_answer
+from data.kqapro.utils.load_kb import DataForSPARQL
+from data.kqapro.utils.sparql_engine import get_sparql_answer
 
 special_tokens = []
 
@@ -19,14 +20,31 @@ def load_data(args):
     val_set = json.load(open(os.path.join(args.input_dir, 'val.json')))
     test_set = json.load(open(os.path.join(args.input_dir, 'test.json')))
     for question in chain(train_set, val_set, test_set):
-        for a in question['choices']:
-            if not a in vocab['answer_token_to_idx']:
-                vocab['answer_token_to_idx'][a] = len(vocab['answer_token_to_idx'])
+        if not question['answer'] in vocab['answer_token_to_idx']:
+            vocab['answer_token_to_idx'][question['answer']] = len(vocab['answer_token_to_idx'])
         question['input'] = question.pop('rewrite')
         question['ir'] = question['ir']
         question['target'] = question.pop('sparql')
+        question['extra_id'] = vocab['answer_token_to_idx'].get(question['answer'])
     return train_set, val_set, test_set, vocab
 
+def evaluate(args, outputs, targets, all_extra_ids, data):
+    kb = DataForSPARQL(os.path.join("./data/kqapro/data/", 'kb.json'))
+    given_answer = [[data.vocab['answer_idx_to_token'][a] for a in [al]] for al in all_extra_ids]
+    count, correct = 0, 0
+    for ans, pred, gold in tqdm(zip(given_answer, outputs, targets)):
+        if pred == gold:
+            correct += 1
+            continue
+        pred = post_process(pred)
+        pred_answer = get_sparql_answer(pred, kb)
+        if pred_answer is None:
+            pred_answer = 'no'
+        is_match = whether_equal(ans[0], pred_answer)
+        if is_match:
+            correct += 1
+        count += 1
+    return correct / count
 
 def whether_equal(answer, pred):
     """
@@ -95,23 +113,4 @@ def post_process(text):
         bingo += chunks[i] + nes[i][0]
     bingo += chunks[-1]
     return bingo
-
-def evaluate(args, given_answer, outputs, kb):
-    count, correct = 0, 0
-    pred_answers = []
-    for a, s in tqdm(zip(given_answer, outputs)):
-        s = post_process(s)
-        pred_answer = get_sparql_answer(s, kb)
-        if pred_answer is None:
-            pred_answer = 'no'
-        is_match = whether_equal(a[0], pred_answer)
-        if is_match:
-            correct += 1
-        count += 1
-        pred_answers.append(pred_answer)
-
-    with open(os.path.join(args.output_dir, 'pred_answers.txt'), 'w') as f:
-        for a in pred_answers:
-            f.write('{}\n'.format(a))
-    return correct / count
 
