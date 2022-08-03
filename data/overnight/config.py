@@ -11,11 +11,6 @@ special_tokens = []
 overnight_domains = ['basketball', 'blocks', 'calendar', 'housing', 'publications', 'recipes', 'restaurants', 'socialnetwork']
 
 def load_data(args):
-    print('Build kb vocabulary')
-    vocab = {
-        'answer_token_to_idx': {}
-    }
-
     print('Load questions')
     train_set, val_set, test_set = [], [], []
     
@@ -27,24 +22,13 @@ def load_data(args):
         val_set += train_data[int(len(train_data)*0.8):]
         test_set += read_overnight(os.path.join(args.input_dir, domain + '_test.tsv'), idx)
     
-    return train_set, val_set, test_set, vocab
+    return train_set, val_set, test_set
 
-def read_overnight(path, domain_idx):
-    ex_list = []
-    infile = pd.read_csv(path, sep='\t')
-    for idx, row in infile.iterrows():
-        ex_list.append({'input': row['utterance'].strip(), 'target': row['logical_form'].strip(), 'domain': domain_idx})
-    translator = Translator()
-    print('Translate {} examples'.format(len(ex_list)))
-    for ex in tqdm(ex_list):
-        ex['ir'] = translator.to_ir(ex['target'])
-    return ex_list
-
-def evaluate(args, outputs, targets, all_domains, *xargs):
+def evaluate(args, outputs, targets, all_extra_ids, *xargs):
     assert len(outputs) == len(targets)
-    data = [[[],[]] for _ in range(len(all_domains))]
+    data = [[[],[]] for _ in range(len(all_extra_ids))]
     evaluators = [Domain.from_dataset(domain) for domain in overnight_domains]
-    for p, g, d in zip(outputs, targets, all_domains):
+    for p, g, d in zip(outputs, targets, all_extra_ids):
         data[d][0].append(p)
         data[d][1].append(g)
     scores = []
@@ -53,3 +37,16 @@ def evaluate(args, outputs, targets, all_domains, *xargs):
         scores += domain_score
         logging.info("{}-domain accuracy: {}".format(overnight_domains[i], np.mean(domain_score)))
     return np.mean(scores)
+    
+def read_overnight(path, domain_idx):
+    ex_list = []
+    infile = pd.read_csv(path, sep='\t')
+    for idx, row in infile.iterrows():
+        ex_list.append({'input': row['utterance'].strip(), 'target': row['logical_form'].strip(), 'extra_id': domain_idx})
+    translator = Translator()
+    print('Translate {} examples'.format(len(ex_list)))
+    for ex in tqdm(ex_list):
+        ex['ir'] = translator.to_ir(ex['target'])
+    return ex_list
+
+

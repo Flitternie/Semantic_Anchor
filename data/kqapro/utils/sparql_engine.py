@@ -5,8 +5,8 @@ from itertools import chain
 from tqdm import tqdm
 import argparse
 
-from utils.load_kb import DataForSPARQL
-from utils.value_class import ValueClass
+from data.kqapro.utils.load_kb import DataForSPARQL
+from data.kqapro.utils.value_class import ValueClass
 
 
 virtuoso_address = "http://166.111.68.66:25890/sparql"

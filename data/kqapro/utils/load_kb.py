@@ -3,7 +3,7 @@ from collections import Counter
 from utils.misc import init_vocab
 from datetime import date
 from queue import Queue
-from utils.value_class import ValueClass
+from data.kqapro.utils.value_class import ValueClass
 
 """
 knowledge json format:

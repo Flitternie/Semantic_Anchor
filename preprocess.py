@@ -38,11 +38,10 @@ def get_mask_ids(info_ids: list, target_ids: list):
 
     return checked_ids
 
-def encode_dataset(args, dataset, tokenizer, vocab=None):
+def encode_dataset(args, dataset, tokenizer):
     inputs = []
     targets = []
-    choices = []
-    answers = []
+    extra_ids = []
     if args.customized:
         if args.supervision_form == "long":
             intermediate_targets = []
@@ -57,11 +56,8 @@ def encode_dataset(args, dataset, tokenizer, vocab=None):
     for item in tqdm(dataset):
         inputs.append(item['input'])
         targets.append(item['target'])
-        if vocab and 'choices' in item.keys() and 'answer' in item.keys():
-            choices.append([vocab['answer_token_to_idx'][w] for w in item['choices']])
-            answers.append(vocab['answer_token_to_idx'].get(item['answer']))
-        elif 'domain' in item.keys():
-            answers.append(item['domain'])
+        if 'extra_id' in item.keys():
+            extra_ids.append(item['extra_id'])
         if args.customized:
             if args.supervision_form == "long":
                 intermediate_targets.append(item["target"])
@@ -83,8 +79,9 @@ def encode_dataset(args, dataset, tokenizer, vocab=None):
     source_ids = np.array(input_ids['input_ids'], dtype = np.int32)
     source_mask = np.array(input_ids['attention_mask'], dtype = np.int32)
     
-    target_ids = tokenizer.batch_encode_plus(targets, max_length = max_seq_length, padding='max_length', truncation = True)
-    target_ids = np.array(target_ids['input_ids'], dtype = np.int32)
+    with tokenizer.as_target_tokenizer():
+        target_ids = tokenizer.batch_encode_plus(targets, max_length = max_seq_length, padding='max_length', truncation = True)
+        target_ids = np.array(target_ids['input_ids'], dtype = np.int32)
 
     if args.customized:        
         if args.supervision_form == "short":
@@ -119,21 +116,17 @@ def encode_dataset(args, dataset, tokenizer, vocab=None):
                 for j in range(len(intermediate_key_info[i])):
                     key_ids = tokenizer.encode(intermediate_key_info[i][j])[1:-1]
                     mask_ids = get_mask_ids(key_ids, intermediate_long_target_ids[i])
-                    np.put(intermediate_long_target_mask[i], mask_ids, 1)
-                    # eos_pos = intermediate_long_target_ids[i].tolist().index(tokenizer.eos_token_id)
-                    # np.put(intermediate_long_target_mask[i], np.arange(eos_pos, len(intermediate_long_target_mask[i])), 1)
-            
+                    np.put(intermediate_long_target_mask[i], mask_ids, 1)           
 
-    choices = np.array(choices, dtype=np.int32) if choices else np.array([0]*len(inputs), dtype=np.int32)
-    answers = np.array(answers) if answers else np.array([0]*len(inputs), dtype=np.int32)
+    extra_ids = np.array(extra_ids) if extra_ids else np.array([0]*len(inputs), dtype=np.int32)
     
     if args.customized:
         if args.supervision_form == "long" or args.supervision_form == "short":
-            return source_ids, source_mask, intermediate_target_ids, intermediate_target_mask, target_ids, choices, answers
+            return source_ids, source_mask, intermediate_target_ids, intermediate_target_mask, target_ids, extra_ids
         elif args.supervision_form == "hybrid":
-            return source_ids, source_mask, intermediate_short_target_ids, intermediate_short_target_mask, intermediate_long_target_ids, intermediate_long_target_mask, target_ids, choices, answers
+            return source_ids, source_mask, intermediate_short_target_ids, intermediate_short_target_mask, intermediate_long_target_ids, intermediate_long_target_mask, target_ids, extra_ids
     else:
-       return source_ids, source_mask, target_ids, choices, answers
+       return source_ids, source_mask, target_ids, extra_ids
 
 
 def main():
@@ -155,7 +148,7 @@ def main():
         spec = importlib.util.spec_from_file_location("config", args.config)
         config = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(config)
-        train_set, val_set, test_set, vocab = config.load_data(args)
+        train_set, val_set, test_set, *xargs = config.load_data(args)
         task_special_tokens = config.special_tokens
     except:
         raise Exception('Error loading config file')
@@ -163,9 +156,10 @@ def main():
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir, exist_ok=True)
     
-    fn = os.path.join(args.output_dir, 'vocab.json')
-    with open(fn, 'w') as f:
-        json.dump(vocab, f, indent=2)
+    if xargs:
+        fn = os.path.join(args.output_dir, 'vocab.json')
+        with open(fn, 'w') as f:
+            json.dump(xargs[0], f, indent=2)
     
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     tokenizer.add_tokens(task_special_tokens)
@@ -174,7 +168,7 @@ def main():
     
     for name, dataset in zip(('train', 'val', 'test'), (train_set, val_set, test_set)):
         print('Encode {} set'.format(name))
-        outputs = encode_dataset(args, dataset, tokenizer, vocab)
+        outputs = encode_dataset(args, dataset, tokenizer)
         with open(os.path.join(args.output_dir, '{}.pt'.format(name)), 'wb') as f:
             for o in outputs:
                 pickle.dump(o, f)

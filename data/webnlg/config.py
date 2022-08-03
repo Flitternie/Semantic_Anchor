@@ -3,6 +3,56 @@ import os
 
 special_tokens = ['<H>', '</H>', '<R>', '</R>', '<T>', '</T>', '<S>']
 
+def load_data(args):
+    print('Load data')
+    train_source = open(os.path.join(args.input_dir, 'train.source')).readlines()
+    train_target = open(os.path.join(args.input_dir, 'train.target')).readlines()
+    val_source = open(os.path.join(args.input_dir, 'val.source')).readlines()
+    val_target = open(os.path.join(args.input_dir, 'val.target')).readlines()
+    test_source = open(os.path.join(args.input_dir, 'test_both.source')).readlines()
+    test_target = open(os.path.join(args.input_dir, 'test_both.target')).readlines()
+    
+    if args.reorder:
+        print('Reorder triples')
+        print(train_source[-1])
+        train_source = reorder_triples(train_source)
+        val_source = reorder_triples(val_source)
+        test_source = reorder_triples(test_source)
+        print(train_source[-1])
+    
+    train_set = [{'input': s, 'target': t} for s, t in zip(train_source, train_target)]
+    val_set = [{'input': s, 'target': t} for s, t in zip(val_source, val_target)]
+    test_set = [{'input': s, 'target': t} for s, t in zip(test_source, test_target)] 
+    
+    return train_set, val_set, test_set
+
+def evaluate(args, outputs, *xargs):
+    data_dir = './data/webnlg/data/'
+    try:
+        data_split = 'test_both' if args.inference else 'val'
+    except:
+        data_split = 'val'
+    pred_file = os.path.join(args.output_dir, 'pred.txt')
+    
+    with open(pred_file, 'w') as f:
+        for line in outputs:
+            f.write('{}\n'.format(convert_text(line)))
+
+    bleu_info = eval_bleu(data_dir, pred_file, data_split)
+    print("BLEU: %.3f" % float(bleu_info.split(",")[0].split("BLEU = ")[1]))
+    try:
+        meteor_info = eval_meteor_test_webnlg(data_dir, pred_file, data_split)
+        print("METEOR: %.3f" % (float(meteor_info.split("Final score:")[1])*100))
+    except:
+        print("METEOR: error")
+    try:
+        chrf_info = eval_chrf_test_webnlg(data_dir, pred_file, data_split)
+        print("CHRF: %.3f" % float(chrf_info.split("c6+w2-avgF2")[1]))
+    except:
+        print("CHRF: error")    
+
+    return float(bleu_info.split(",")[0].split("BLEU = ")[1])
+
 def reorder_triples(sequences):
     reordered_sequences = []
     for sequence in sequences:
@@ -31,34 +81,7 @@ def reorder_triples(sequences):
         reordered_sequences.append(reordered_sequence.replace('>  <', '> <').strip())
     return reordered_sequences
 
-def load_data(args):
-    vocab = {
-        'answer_token_to_idx': {}
-    }
-    print('Load data')
-    train_source = open(os.path.join(args.input_dir, 'train.source')).readlines()
-    train_target = open(os.path.join(args.input_dir, 'train.target')).readlines()
-    val_source = open(os.path.join(args.input_dir, 'val.source')).readlines()
-    val_target = open(os.path.join(args.input_dir, 'val.target')).readlines()
-    test_source = open(os.path.join(args.input_dir, 'test_both.source')).readlines()
-    test_target = open(os.path.join(args.input_dir, 'test_both.target')).readlines()
-    
-    if args.reorder:
-        print('Reorder triples')
-        print(train_source[-1])
-        train_source = reorder_triples(train_source)
-        val_source = reorder_triples(val_source)
-        test_source = reorder_triples(test_source)
-        print(train_source[-1])
-    
-    train_set = [{'input': s, 'target': t} for s, t in zip(train_source, train_target)]
-    val_set = [{'input': s, 'target': t} for s, t in zip(val_source, val_target)]
-    test_set = [{'input': s, 'target': t} for s, t in zip(test_source, test_target)] 
-    
-    return train_set, val_set, test_set, vocab
-
 def convert_text(text):
-    #return text
     # text = text.lower()
     text = ' '.join(re.split('(\W)', text))
     text = ' '.join(text.split())
@@ -144,23 +167,3 @@ def eval_chrf(ref_file, pred_file):
         chrf_data = "no data"
     return chrf_data
 
-def evaluate(args, data_dir, outputs, data_split):
-    pred_file = os.path.join(args.output_dir, 'pred.txt')
-    
-    with open(pred_file, 'w') as f:
-        for line in outputs:
-            f.write('{}\n'.format(convert_text(line)))
-
-    bleu_info = eval_bleu(data_dir, pred_file, data_split)
-    print("BLEU: %.3f" % float(bleu_info.split(",")[0].split("BLEU = ")[1]))
-    try:
-        meteor_info = eval_meteor_test_webnlg(data_dir, pred_file, data_split)
-        print("METEOR: %.3f" % (float(meteor_info.split("Final score:")[1])*100))
-    except:
-        print("METEOR: error")
-    try:
-        chrf_info = eval_chrf_test_webnlg(data_dir, pred_file, data_split)
-        print("CHRF: %.3f" % float(chrf_info.split("c6+w2-avgF2")[1]))
-    except:
-        print("CHRF: error")    
-    return float(bleu_info.split(",")[0].split("BLEU = ")[1])
