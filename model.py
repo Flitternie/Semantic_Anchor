@@ -37,8 +37,8 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
         self.lm_head = nn.Linear(config.d_model, self.model.shared.num_embeddings, bias=False)
         
         # add extra language model head layers for intermediate supervision
-        self.num_hybrid_layers = 6
-        self.intermediate_lm_head = nn.Linear(config.d_model, self.model.shared.num_embeddings, bias=True)
+        self.num_hybrid_layers = 5
+        # self.intermediate_lm_head = nn.Linear(config.d_model, self.model.shared.num_embeddings, bias=True)
         self.intermediate_weighting = nn.parameter.Parameter(torch.ones(self.num_hybrid_layers), requires_grad=True)
         self.extra_intermediate_weighting = nn.parameter.Parameter(torch.ones(self.num_hybrid_layers), requires_grad=True)
 
@@ -74,10 +74,10 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
             old_lm_head = self.get_output_embeddings()
             new_lm_head = self._get_resized_lm_head(old_lm_head, new_num_tokens)
             self.set_output_embeddings(new_lm_head)
-        if self.get_intermediate_output_embeddings() is not None and not self.config.tie_word_embeddings:
-            old_intermediate_lm_head = self.get_intermediate_output_embeddings()
-            new_intermediate_lm_head = self._get_resized_lm_head(old_intermediate_lm_head, new_num_tokens)
-            self.set_intermediate_output_embeddings(new_intermediate_lm_head)
+        # if self.get_intermediate_output_embeddings() is not None and not self.config.tie_word_embeddings:
+        #     old_intermediate_lm_head = self.get_intermediate_output_embeddings()
+        #     new_intermediate_lm_head = self._get_resized_lm_head(old_intermediate_lm_head, new_num_tokens)
+        #     self.set_intermediate_output_embeddings(new_intermediate_lm_head)
 
         return self.get_input_embeddings()
 
@@ -100,9 +100,9 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
         output_embeddings = self.get_output_embeddings()
         if output_embeddings is not None and self.config.tie_word_embeddings:
             self._tie_or_clone_weights(output_embeddings, self.get_input_embeddings())
-        intermediate_output_embeddings = self.get_intermediate_output_embeddings()
-        if intermediate_output_embeddings is not None and self.config.tie_word_embeddings:
-            self._tie_or_clone_weights(intermediate_output_embeddings, self.get_input_embeddings())
+        # intermediate_output_embeddings = self.get_intermediate_output_embeddings()
+        # if intermediate_output_embeddings is not None and self.config.tie_word_embeddings:
+        #     self._tie_or_clone_weights(intermediate_output_embeddings, self.get_input_embeddings())
 
         if self.config.is_encoder_decoder and self.config.tie_encoder_decoder:
             if hasattr(self, self.base_model_prefix):
@@ -116,14 +116,14 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
     def get_output_embeddings(self):
         return self.lm_head
     
-    def get_intermediate_output_embeddings(self):
-        return self.intermediate_lm_head
+    # def get_intermediate_output_embeddings(self):
+    #     return self.intermediate_lm_head
 
     def set_output_embeddings(self, new_embeddings):
         self.lm_head = new_embeddings
     
-    def set_intermediate_output_embeddings(self, new_embeddings):
-        self.intermediate_lm_head = new_embeddings
+    # def set_intermediate_output_embeddings(self, new_embeddings):
+    #     self.intermediate_lm_head = new_embeddings
 
     def forward(
         self,
@@ -191,8 +191,8 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
         
         # add extra language model logits for computing intermediate loss
         intermediate_decoder_weights = nn.functional.softmax(self.intermediate_weighting, dim=0)
-        intermediate_decoder_outputs = nn.functional.linear(torch.stack(outputs['decoder_hidden_states'][1:], dim=-1), intermediate_decoder_weights)
-        intermediate_lm_logits = self.intermediate_lm_head(intermediate_decoder_outputs)
+        intermediate_decoder_outputs = nn.functional.linear(torch.stack(outputs['decoder_hidden_states'][1:self.num_hybrid_layers+1], dim=-1), intermediate_decoder_weights)
+        intermediate_lm_logits = self.lm_head(intermediate_decoder_outputs) + self.final_logits_bias
 
         masked_intermediate_lm_loss = None
         masked_overall_lm_loss = None
@@ -209,8 +209,8 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
 
         if extra_intermediate_labels is not None:
             intermediate_decoder_weights = nn.functional.softmax(self.extra_intermediate_weighting, dim=0)
-            intermediate_decoder_outputs = nn.functional.linear(torch.stack(outputs['decoder_hidden_states'][1:], dim=-1), intermediate_decoder_weights)
-            extra_intermediate_lm_logits = self.intermediate_lm_head(intermediate_decoder_outputs)
+            intermediate_decoder_outputs = nn.functional.linear(torch.stack(outputs['decoder_hidden_states'][1:self.num_hybrid_layers+1], dim=-1), intermediate_decoder_weights)
+            extra_intermediate_lm_logits = self.lm_head(intermediate_decoder_outputs) + self.final_logits_bias
             
             new_extra_intermediate_labels = extra_intermediate_labels.clone()
             new_extra_intermediate_labels[new_extra_intermediate_labels == -100] = 1

@@ -75,7 +75,7 @@ def train(args):
     
     if args.n_gpus > 1:
         model = nn.SyncBatchNorm.convert_sync_batchnorm(model).cuda()
-        model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
+        model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
     else:
         model = model.to(device)
 
@@ -118,10 +118,9 @@ def train(args):
 
     model.zero_grad()
     if args.local_rank in [-1, 0]:
-        current_acc, _ = validate(args, model, val_loader, device, tokenizer)
+        # current_acc, _ = validate(args, model, val_loader, device, tokenizer)
         print("Current performance on validation set: %f" % (current_acc))
     
-    save_steps = round(len(train_loader.dataset)/args.batch_size) // args.logging_per_epoch
     epochs_not_improving = 0
 
     for epoch_i in range(int(args.num_train_epochs)):
@@ -171,7 +170,7 @@ def train(args):
 
             outputs = model(**inputs)
             loss = outputs[0]
-            if torch.cuda.device_count() > 1:
+            if args.n_gpus > 1:
                 loss = loss.sum()
 
             loss.backward()
@@ -185,34 +184,98 @@ def train(args):
                 scheduler.step()  # Update learning rate schedule
                 model.zero_grad()
                 global_step += 1
+        
+        if args.n_gpus > 1:
+            dist.barrier()
+        
+        if args.local_rank in [-1, 0]:
+            logging.info("Epoch %d loss: %.3f" % (epoch_i, loss_num))
+            current_acc, _ = validate(args, model, val_loader, device, tokenizer)
+            print("Current best performance on validation set: %f" % (current_acc))
+        
+        if args.local_rank in [-1, 0] and current_acc > best_acc:
+            epochs_not_improving = 0
+            best_acc = current_acc
+            print("Best performance on validation set updated: %f" % (best_acc))
+            # Save model checkpoint
+            output_dir = os.path.join(args.output_dir, "checkpoint-best")
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir, exist_ok=True)
+            # Take care of distributed/parallel training
+            model_to_save = (
+                model.module if hasattr(model, "module") else model
+            )  
+            model_to_save.save_pretrained(output_dir)
+            torch.save(args, os.path.join(output_dir, "training_args.bin"))
+            logging.info("Saving model checkpoint to %s", output_dir)
+            tokenizer.save_vocabulary(output_dir)
+            torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
+            torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
+            logging.info("Saving optimizer and scheduler states to %s", output_dir)
+            
+        if args.customized:
+            if 'cuda' in str(device):
+                torch.cuda.empty_cache()
+            
+            deltas = []
+            print("Adjusting intermediate weights...")
+            model.train()
+            sampled_data = iter(train_loader)
+            for i in range(args.sample_number):
+                ad_batch = next(sampled_data)
+                model.zero_grad()
+                ad_batch = tuple(t.to(device) for t in ad_batch)
+                pad_token_id = tokenizer.pad_token_id
+                source_ids, source_mask, intermediate, intermediate_mask, y = ad_batch[0], ad_batch[1], ad_batch[2], ad_batch[3], ad_batch[4]
+                intermediate_labels = intermediate[:, 1:].clone()
+                intermediate_labels[intermediate[:, 1:] == pad_token_id] = -100
+                intermediate_masks = intermediate_mask[:, 1:].clone()
+                y_ids = y[:, :-1].contiguous()
+                labels = y[:, 1:].clone()
+                labels[y[:, 1:] == pad_token_id] = -100
+                inputs = {
+                    "input_ids": source_ids.to(device),
+                    "attention_mask": source_mask.to(device),
+                    "decoder_input_ids": y_ids.to(device),
+                    "intermediate_labels": intermediate_labels.to(device),
+                    "intermediate_masks": intermediate_masks.to(device),
+                    "labels": labels.to(device),
+                    "alpha": alpha,
+                }
+                outputs = model(**inputs)
+                target_loss, intermediate_loss = outputs[-2], outputs[-1]
+                if args.n_gpus > 1:
+                    target_loss = target_loss.sum()
+                    intermediate_loss = intermediate_loss.sum()
 
-            if global_step % save_steps == 0 and args.local_rank in [-1, 0]:
-                logging.info("Epoch %d loss: %.3f" % (epoch_i, loss_num))
-                current_acc, _ = validate(args, model, val_loader, device, tokenizer)
-                print("Current best performance on validation set: %f" % (current_acc))
-            
-            if args.local_rank in [-1, 0] and save_steps > 0 and global_step % save_steps == 0 and current_acc > best_acc:
-                epochs_not_improving = 0
-                best_acc = current_acc
-                print("Best performance on validation set updated: %f" % (best_acc))
-                # Save model checkpoint
-                output_dir = os.path.join(args.output_dir, "checkpoint-best")
-                if not os.path.exists(output_dir):
-                    os.makedirs(output_dir, exist_ok=True)
-                # Take care of distributed/parallel training
-                model_to_save = (
-                    model.module if hasattr(model, "module") else model
-                )  
-                model_to_save.save_pretrained(output_dir)
-                torch.save(args, os.path.join(output_dir, "training_args.bin"))
-                logging.info("Saving model checkpoint to %s", output_dir)
-                tokenizer.save_vocabulary(output_dir)
-                torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
-                torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
-                logging.info("Saving optimizer and scheduler states to %s", output_dir)
-            
+                intermediate_loss = alpha * intermediate_loss + 0 * target_loss  # to avoid unused param error
+                intermediate_loss.backward()
+                optimizer.step()
+                model.zero_grad()
+                outputs = model(**inputs)
+                updated_target_loss = outputs[-2]
+                if args.n_gpus > 1:
+                    updated_target_loss = updated_target_loss.sum()
+                delta = target_loss.item() / updated_target_loss.item()
+                deltas.append(delta)
+                model.zero_grad()
+
+            assert len(deltas) == args.sample_number
+            deltas = torch.tensor(deltas).to(device)
+            s = torch.cuda.Stream()
             if args.n_gpus > 1:
-                dist.barrier()
+                handle = dist.all_reduce(deltas, async_op=True)
+                handle.wait()
+                with torch.cuda.stream(s):
+                    s.wait_stream(torch.cuda.default_stream())
+                deltas = deltas / args.n_gpus
+
+            alpha = min(alpha * ((sum(deltas) / len(deltas))**args.adjustment_step), args.max_alpha)
+            if args.local_rank in [-1, 0]:
+                logging.info("The updated alpha is: %f" % alpha)
+        
+        if args.n_gpus > 1:
+            dist.barrier()
 
         if 'cuda' in str(device):
             torch.cuda.empty_cache()
@@ -239,7 +302,6 @@ def main():
     parser.add_argument('--seed', type=int, default=42, help='random seed')
     parser.add_argument('--learning_rate', default=3e-5, type=float)
     parser.add_argument('--num_train_epochs', default=25, type=int)
-    parser.add_argument('--logging_per_epoch', default=1, type=int)
     parser.add_argument('--early_stopping', default=5, type=int)
     parser.add_argument('--warmup_proportion', default=0.1, type=float,
                         help="Proportion of training to perform linear learning rate warmup for,E.g., 0.1=10% of training.")
@@ -255,12 +317,12 @@ def main():
     parser.add_argument("--beam_size", default=1, type=int,
                         help="Beam size for inference.")
 
-    parser.add_argument("--sample_number", default=10, type=int)
-    parser.add_argument("--max_alpha", default=1.5, type=int)
-
     # special parameters
     parser.add_argument('--customized', action='store_true')
     parser.add_argument('--hybrid', action='store_true')
+    parser.add_argument('--adjustment_step', default=2, type=float)
+    parser.add_argument("--sample_number", default=10, type=int)
+    parser.add_argument("--max_alpha", default=1.5, type=float)
 
     parser.add_argument('--local_rank', default=-1, type=int,
                     help='node rank for distributed training')
