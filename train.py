@@ -248,7 +248,7 @@ def train(args):
                     target_loss = target_loss.sum()
                     intermediate_loss = intermediate_loss.sum()
 
-                intermediate_loss = alpha * intermediate_loss + 0 * target_loss  # to avoid unused param error
+                intermediate_loss = alpha * intermediate_loss # to avoid unused param error
                 intermediate_loss.backward()
                 optimizer.step()
                 model.zero_grad()
@@ -324,8 +324,7 @@ def main():
     parser.add_argument("--sample_number", default=10, type=int)
     parser.add_argument("--max_alpha", default=1.5, type=float)
 
-    parser.add_argument('--local_rank', default=-1, type=int,
-                    help='node rank for distributed training')
+    parser.add_argument('--local_rank', default=-1, type=int)
     parser.add_argument('--port', default=12355, type=int)
     
     args = parser.parse_args()
@@ -337,20 +336,22 @@ def main():
     fileHandler.setFormatter(logFormatter)
     rootLogger.addHandler(fileHandler)
 
-    # args display
-    if args.local_rank in [-1, 0]:
-        for k, v in vars(args).items():
-            logging.info(k+':'+str(v))
-
     seed_everything(args.seed)
 
     # distributed data parallel   
     args.n_gpus = torch.cuda.device_count()
     if args.n_gpus > 1:
+        args.local_rank = int(os.environ["LOCAL_RANK"])
         os.environ['MASTER_ADDR'] = 'localhost'
         os.environ['MASTER_PORT'] = str(args.port)
         dist.init_process_group(backend='nccl', world_size=args.n_gpus)
         torch.cuda.set_device(args.local_rank)
+    
+    # args display
+    if args.local_rank in [-1, 0]:
+        for k, v in vars(args).items():
+            logging.info(k+':'+str(v))
+
 
     train(args)
     

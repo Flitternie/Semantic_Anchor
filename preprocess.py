@@ -69,28 +69,28 @@ def encode_dataset(args, dataset, tokenizer):
                 intermediate_long_targets.append(item["target"])
                 intermediate_key_info.append(get_key_info(item['ir']))
 
-    sequences = inputs + targets
-    encoded_inputs = tokenizer(sequences, padding = True)
+    # sequences = inputs + targets
+    # encoded_inputs = tokenizer(sequences, padding = True)
     
-    max_seq_length = len(encoded_inputs['input_ids'][0])
-    assert max_seq_length == len(encoded_inputs['input_ids'][-1])
+    # max_seq_length = len(encoded_inputs['input_ids'][0])
+    # assert max_seq_length == len(encoded_inputs['input_ids'][-1])
 
-    input_ids = tokenizer.batch_encode_plus(inputs, max_length = max_seq_length, padding='max_length', truncation = True)
+    input_ids = tokenizer.batch_encode_plus(inputs, max_length = args.max_length, padding='max_length', truncation = True)
     source_ids = np.array(input_ids['input_ids'], dtype = np.int32)
     source_mask = np.array(input_ids['attention_mask'], dtype = np.int32)
     
     with tokenizer.as_target_tokenizer():
-        target_ids = tokenizer.batch_encode_plus(targets, max_length = max_seq_length, padding='max_length', truncation = True)
+        target_ids = tokenizer.batch_encode_plus(targets, max_length = args.max_length, padding='max_length', truncation = True)
         target_ids = np.array(target_ids['input_ids'], dtype = np.int32)
 
     if args.customized:        
         if args.supervision_form == "short":
-            intermediate_targets = tokenizer.batch_encode_plus(intermediate_targets, max_length = max_seq_length, padding='max_length', truncation = True)
+            intermediate_targets = tokenizer.batch_encode_plus(intermediate_targets, max_length = args.max_length, padding='max_length', truncation = True)
             intermediate_target_ids = np.array(intermediate_targets['input_ids'], dtype=np.int32)
             intermediate_target_mask = np.array(intermediate_targets['attention_mask'], dtype=np.int32)
         
         elif args.supervision_form == "long":
-            intermediate_targets = tokenizer.batch_encode_plus(intermediate_targets, max_length = max_seq_length, padding='max_length', truncation = True)
+            intermediate_targets = tokenizer.batch_encode_plus(intermediate_targets, max_length = args.max_length, padding='max_length', truncation = True)
             intermediate_target_ids = np.array(intermediate_targets['input_ids'], dtype=np.int32)
             intermediate_target_mask = np.zeros_like(intermediate_target_ids, dtype=np.int32)
             
@@ -104,11 +104,11 @@ def encode_dataset(args, dataset, tokenizer):
                 # np.put(intermediate_target_mask[i], np.arange(eos_pos, len(intermediate_target_mask[i])), 1)
         
         elif args.supervision_form == "hybrid":
-            intermediate_short_targets = tokenizer.batch_encode_plus(intermediate_short_targets, max_length = max_seq_length, padding='max_length', truncation = True)
+            intermediate_short_targets = tokenizer.batch_encode_plus(intermediate_short_targets, max_length = args.max_length, padding='max_length', truncation = True)
             intermediate_short_target_ids = np.array(intermediate_short_targets['input_ids'], dtype=np.int32)
             intermediate_short_target_mask = np.array(intermediate_short_targets['attention_mask'], dtype=np.int32)
 
-            intermediate_long_targets = tokenizer.batch_encode_plus(intermediate_long_targets, max_length = max_seq_length, padding='max_length', truncation = True)
+            intermediate_long_targets = tokenizer.batch_encode_plus(intermediate_long_targets, max_length = args.max_length, padding='max_length', truncation = True)
             intermediate_long_target_ids = np.array(intermediate_long_targets['input_ids'], dtype=np.int32)
             intermediate_long_target_mask = np.zeros_like(intermediate_long_target_ids, dtype=np.int32)
             print("Masking tokens...")
@@ -136,6 +136,7 @@ def main():
     parser.add_argument('--config', required=True)
     parser.add_argument('--model_name_or_path', required=True)
 
+    parser.add_argument('--max_length', default=512, type=int)
     parser.add_argument('--customized', action='store_true')
     parser.add_argument('--supervision_form', choices=['long', 'short', 'hybrid'])
     args = parser.parse_args()

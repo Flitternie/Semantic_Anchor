@@ -31,9 +31,11 @@ class Dataset(torch.utils.data.Dataset):
 
 
 def load_vocab(path):
-    vocab = json.load(open(path))
-    vocab['answer_idx_to_token'] = invert_dict(vocab['answer_token_to_idx'])
-    return vocab
+    try:
+        vocab = json.load(open(path))
+        vocab['answer_idx_to_token'] = invert_dict(vocab['answer_token_to_idx'])
+    except:
+        vocab = None
 
 def collate(batch):
     batch = list(zip(*batch))
