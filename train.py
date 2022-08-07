@@ -170,7 +170,6 @@ def train(args):
                 "labels": labels.to(device),
             }
             if args.customized:
-                pass
                 inputs["intermediate_labels"] = intermediate_labels.to(device)
                 inputs["intermediate_masks"] = intermediate_masks.to(device)
                 inputs["alpha"] = alpha
