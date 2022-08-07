@@ -6,9 +6,6 @@ from data.webnlg.config import reorder_triples
 special_tokens = ['<H>', '</H>', '<R>', '</R>', '<T>', '</T>', '<S>']
 
 def load_data(args):
-    vocab = {
-        'answer_token_to_idx': {}
-    }
     print('Load data')
     train_source = open(os.path.join(args.input_dir, 'train.source')).readlines()
     train_target = open(os.path.join(args.input_dir, 'train.target')).readlines()
@@ -27,7 +24,17 @@ def load_data(args):
     val_set = [{'input': t, 'target': s} for s, t in zip(val_source, val_target)]
     test_set = [{'input': t, 'target': s} for s, t in zip(test_source, test_target)] 
     
-    return train_set, val_set, test_set, vocab
+    return train_set, val_set, test_set
+
+def evaluate(args, outputs, targets, *xargs):
+    if args.reorder:
+        outputs = [post_process(output) for output in outputs]
+        targets = [post_process(target) for target in targets]
+    recall, precision, f1 = eval_accuracy(outputs, targets)
+    print("Recall: {}".format(recall))
+    print("Precision: {}".format(precision))
+    print("F1: {}".format(f1))
+    return recall
 
 def extract_triples(sequence):
     triples = []
@@ -68,14 +75,3 @@ def eval_accuracy(preds, golds):
     f1 = [2 * (precision[i] * recall[i]) / (precision[i] + recall[i]) for i in range(len(precision))]
     return np.mean(recall), np.mean(precision), np.mean(f1)
         
-
-def evaluate(args, outputs, targets):
-    if args.reorder:
-        outputs = [post_process(output) for output in outputs]
-        targets = [post_process(target) for target in targets]
-    recall, precision, f1 = eval_accuracy(outputs, targets)
-    print("Recall: {}".format(recall))
-    print("Precision: {}".format(precision))
-    print("F1: {}".format(f1))
-    return recall
-    
