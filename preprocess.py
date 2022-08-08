@@ -19,26 +19,28 @@ def get_key_info(ir: str):
 def extract_first_order_syntax(ir):
     return re.findall(r"(?<=\<[A-Z]\>)[^\<\>]*(?=\<\/[A-Z]\>)", ir)
 
-def get_mask_ids(info_ids: list, target_ids: list):
-    checked_ids = []
-    temp_ids = []
-    j = 0
-    for i in range(len(target_ids)):
-        if j == len(info_ids):
-            checked_ids.extend(temp_ids)
-            j, temp_ids = 0, []
-        if target_ids[i] == info_ids[j]:
-            temp_ids.append(i)
-            j += 1
-        else:
-            j, temp_ids = 0, []
+def encode_dataset(args, dataset, tokenizer):
+    
+    def get_mask_ids(info_ids: list, target_ids: list):
+        checked_ids = []
+        temp_ids = []
+        j = 0
+        for i in range(len(target_ids)):
+            if target_ids[i] == tokenizer.pad_token_id:
+                break
+            if j == len(info_ids):
+                checked_ids.extend(temp_ids)
+                j, temp_ids = 0, []
             if target_ids[i] == info_ids[j]:
                 temp_ids.append(i)
                 j += 1
+            else:
+                j, temp_ids = 0, []
+                if target_ids[i] == info_ids[j]:
+                    temp_ids.append(i)
+                    j += 1
+        return checked_ids
 
-    return checked_ids
-
-def encode_dataset(args, dataset, tokenizer):
     inputs = []
     targets = []
     extra_ids = []
@@ -69,28 +71,26 @@ def encode_dataset(args, dataset, tokenizer):
                 intermediate_long_targets.append(item["target"])
                 intermediate_key_info.append(get_key_info(item['ir']))
 
-    # sequences = inputs + targets
-    # encoded_inputs = tokenizer(sequences, padding = True)
-    
-    # max_seq_length = len(encoded_inputs['input_ids'][0])
-    # assert max_seq_length == len(encoded_inputs['input_ids'][-1])
+    sequences = inputs + targets
+    encoded_inputs = tokenizer(sequences, padding = True)
+    max_seq_length = len(encoded_inputs['input_ids'][0])
 
-    input_ids = tokenizer.batch_encode_plus(inputs, max_length = args.max_length, padding='max_length', truncation = True)
+    input_ids = tokenizer.batch_encode_plus(inputs, max_length = max_seq_length, padding='max_length', truncation = True)
     source_ids = np.array(input_ids['input_ids'], dtype = np.int32)
     source_mask = np.array(input_ids['attention_mask'], dtype = np.int32)
     
     with tokenizer.as_target_tokenizer():
-        target_ids = tokenizer.batch_encode_plus(targets, max_length = args.max_length, padding='max_length', truncation = True)
+        target_ids = tokenizer.batch_encode_plus(targets, max_length = max_seq_length, padding='max_length', truncation = True)
         target_ids = np.array(target_ids['input_ids'], dtype = np.int32)
 
     if args.customized:        
         if args.supervision_form == "short":
-            intermediate_targets = tokenizer.batch_encode_plus(intermediate_targets, max_length = args.max_length, padding='max_length', truncation = True)
+            intermediate_targets = tokenizer.batch_encode_plus(intermediate_targets, max_length = max_seq_length, padding='max_length', truncation = True)
             intermediate_target_ids = np.array(intermediate_targets['input_ids'], dtype=np.int32)
             intermediate_target_mask = np.array(intermediate_targets['attention_mask'], dtype=np.int32)
         
         elif args.supervision_form == "long":
-            intermediate_targets = tokenizer.batch_encode_plus(intermediate_targets, max_length = args.max_length, padding='max_length', truncation = True)
+            intermediate_targets = tokenizer.batch_encode_plus(intermediate_targets, max_length = max_seq_length, padding='max_length', truncation = True)
             intermediate_target_ids = np.array(intermediate_targets['input_ids'], dtype=np.int32)
             intermediate_target_mask = np.zeros_like(intermediate_target_ids, dtype=np.int32)
             
@@ -100,15 +100,15 @@ def encode_dataset(args, dataset, tokenizer):
                     key_ids = tokenizer.encode(intermediate_key_info[i][j])[1:-1]
                     mask_ids = get_mask_ids(key_ids, intermediate_target_ids[i])
                     np.put(intermediate_target_mask[i], mask_ids, 1)
-                # eos_pos = intermediate_target_ids[i].tolist().index(tokenizer.eos_token_id)
-                # np.put(intermediate_target_mask[i], np.arange(eos_pos, len(intermediate_target_mask[i])), 1)
+                    eos_pos = intermediate_target_ids[i].tolist().index(tokenizer.eos_token_id)
+                    np.put(intermediate_target_mask[i], np.arange(eos_pos, len(intermediate_target_mask[i])), 1)
         
         elif args.supervision_form == "hybrid":
-            intermediate_short_targets = tokenizer.batch_encode_plus(intermediate_short_targets, max_length = args.max_length, padding='max_length', truncation = True)
+            intermediate_short_targets = tokenizer.batch_encode_plus(intermediate_short_targets, max_length = max_seq_length, padding='max_length', truncation = True)
             intermediate_short_target_ids = np.array(intermediate_short_targets['input_ids'], dtype=np.int32)
             intermediate_short_target_mask = np.array(intermediate_short_targets['attention_mask'], dtype=np.int32)
 
-            intermediate_long_targets = tokenizer.batch_encode_plus(intermediate_long_targets, max_length = args.max_length, padding='max_length', truncation = True)
+            intermediate_long_targets = tokenizer.batch_encode_plus(intermediate_long_targets, max_length = max_seq_length, padding='max_length', truncation = True)
             intermediate_long_target_ids = np.array(intermediate_long_targets['input_ids'], dtype=np.int32)
             intermediate_long_target_mask = np.zeros_like(intermediate_long_target_ids, dtype=np.int32)
             print("Masking tokens...")
@@ -136,7 +136,6 @@ def main():
     parser.add_argument('--config', required=True)
     parser.add_argument('--model_name_or_path', required=True)
 
-    parser.add_argument('--max_length', default=512, type=int)
     parser.add_argument('--customized', action='store_true')
     parser.add_argument('--supervision_form', choices=['long', 'short', 'hybrid'])
     args = parser.parse_args()
@@ -144,6 +143,9 @@ def main():
 
     if bool(args.customized) ^ bool(args.supervision_form):
         raise ValueError("args.customized and args.supervision_form must be co-specified.")
+    
+    for k, v in vars(args).items():
+        print(k+':'+str(v))
 
     try:
         spec = importlib.util.spec_from_file_location("config", args.config)

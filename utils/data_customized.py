@@ -36,6 +36,7 @@ def load_vocab(path):
         vocab['answer_idx_to_token'] = invert_dict(vocab['answer_token_to_idx'])
     except:
         vocab = None
+    return vocab
 
 def collate(batch):
     batch = list(zip(*batch))
