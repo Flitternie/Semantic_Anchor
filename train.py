@@ -12,9 +12,10 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 
-from transformers import AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers import AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer, T5ForConditionalGeneration
+
 import transformers.utils.logging as transformers_logging 
-from model import CustomizedBartForConditionalGeneration
+from model import CustomizedBartForConditionalGeneration, CustomizedT5ForConditionalGeneration
 
 from utils.misc import seed_everything, ProgressBar
 from utils.lr_scheduler import get_linear_schedule_with_warmup
@@ -25,7 +26,8 @@ logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %
 logFormatter = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s')
 rootLogger = logging.getLogger()
 import warnings
-warnings.simplefilter("ignore") 
+warnings.simplefilter("ignore")
+
 
 def train(args):
     if args.customized:
@@ -51,9 +53,15 @@ def train(args):
     if args.local_rank in [-1, 0]:
         logging.info("Create model.........")
     if args.customized:
-        _, model_class, tokenizer_class = (AutoConfig, CustomizedBartForConditionalGeneration, AutoTokenizer)
+        if "t5" in args.model_name_or_path:
+            _, model_class, tokenizer_class = (AutoConfig, CustomizedT5ForConditionalGeneration, AutoTokenizer)
+        else:
+            _, model_class, tokenizer_class = (AutoConfig, CustomizedBartForConditionalGeneration, AutoTokenizer)
     else:
-        _, model_class, tokenizer_class = (AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer)
+        if "t5" in args.model_name_or_path:
+            _, model_class, tokenizer_class = (AutoConfig, T5ForConditionalGeneration, AutoTokenizer)
+        else:
+            _, model_class, tokenizer_class = (AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer)
     tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
 
     try:
@@ -81,11 +89,11 @@ def train(args):
 
     t_total = len(train_loader) // args.gradient_accumulation_steps * args.num_train_epochs    # Prepare optimizer and schedule (linear warmup and decay)
     no_decay = ["bias", "LayerNorm.weight"]
-    bart_param_optimizer = list(model.named_parameters())
+    param_optimizer = list(model.named_parameters())
     optimizer_grouped_parameters = [
-        {'params': [p for n, p in bart_param_optimizer if not any(nd in n for nd in no_decay)],
+        {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)],
          'weight_decay': args.weight_decay, 'lr': args.learning_rate},
-        {'params': [p for n, p in bart_param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0,
+        {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0,
          'lr': args.learning_rate}
     ]
     args.warmup_steps = int(t_total * args.warmup_proportion)
@@ -150,6 +158,7 @@ def train(args):
 
             else:
                 source_ids, source_mask, y = batch[0], batch[1], batch[-2]
+                print(tokenizer.decode(y[0]))
             y_ids = y[:, :-1].contiguous()
             labels = y[:, 1:].clone()
             labels[y[:, 1:] == pad_token_id] = -100
