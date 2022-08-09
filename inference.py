@@ -51,6 +51,7 @@ def validate(args, model, data, device, tokenizer):
         all_intermediate_targets = []
         sublayer_outputs = [[] for _ in range(model.num_hybrid_layers)]
         logging.info(nn.functional.softmax(model.intermediate_weighting).cpu().tolist()) # weighting for intermediate layers
+        # print(model.hybrid_decoder_distribution.weight.cpu().tolist()) # weighting for hybrid layers
 
     with torch.no_grad():
         for batch in tqdm(data, total=len(data)):
@@ -123,7 +124,8 @@ def validate(args, model, data, device, tokenizer):
         #     with open(os.path.join(args.output_dir, 'layer_%d_output.txt' % (i+1)), 'w') as f:
         #         for output in sublayer_output:
         #             f.write(output + '\n')
-
+        
+    args.tokenizer = tokenizer
     str_matching = np.mean([1 if p.strip() == g.strip() else 0 for p, g in zip(outputs, targets)])
     lf_matching = config.evaluate(args, outputs, targets, all_extra_ids, data)
     logging.info('Execution accuracy: {}, String matching accuracy: {}'.format(lf_matching, str_matching))
@@ -179,15 +181,14 @@ def main():
     parser.add_argument('--model_name_or_path', required=True)
     parser.add_argument('--ckpt', required=True)
 
-    # training parameters
+    # inference parameters
     parser.add_argument('--batch_size', default=256, type=int)
     parser.add_argument('--seed', type=int, default=42, help='random seed')
     parser.add_argument("--eval_max_length", default=500, type=int,
                         help="Eval max length.")
     parser.add_argument("--beam_size", default=1, type=int,
                         help="Beam size for inference.")
-
-    # validating parameters
+    
     # parser.add_argument('--num_return_sequences', default=1, type=int)
 
     # model hyperparameters

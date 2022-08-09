@@ -80,6 +80,9 @@ def train(args):
         logging.info("Initiating model parameters.........")
     model = model_class.from_pretrained(args.ckpt) if args.ckpt else model_class.from_pretrained(args.model_name_or_path)
     model.resize_token_embeddings(len(tokenizer))
+
+    if args.shared_lm:
+        model.shared_lm = True
     
     if args.n_gpus > 1:
         model = nn.SyncBatchNorm.convert_sync_batchnorm(model).cuda()
@@ -120,7 +123,7 @@ def train(args):
         logging.info("Continuing training from checkpoint, will skip to saved global_step")
     
     global_step = 0
-    tr_loss = 0.0
+    total_loss = 0.0
     best_acc, current_acc = 0.0, 0.0
     alpha = 1
 
@@ -138,7 +141,6 @@ def train(args):
         if args.local_rank in [-1, 0]:
             epochs_not_improving += 1
         for step, batch in enumerate(train_loader):
-
             model.train()
             batch = tuple(t.to(device) for t in batch)
             pad_token_id = tokenizer.pad_token_id
@@ -178,14 +180,37 @@ def train(args):
                     inputs["extra_intermediate_masks"] = extra_intermediate_masks.to(device)
 
             outputs = model(**inputs)
-            loss = outputs[0]
+            # loss = outputs.loss
+            main_loss, intermediate_loss = outputs.main_loss, outputs.intermediate_loss
             if args.n_gpus > 1:
-                loss = loss.sum()
+                main_loss = main_loss.mean()
+                intermediate_loss = intermediate_loss.mean()
 
+            if args.alpha_decay == 'adaptive':
+                for layer in outputs.decoder_hidden_states[:-1]:
+                    layer.retain_grad()
+
+                main_loss.backward(retain_graph=True)
+                main_partial_grad = [layer.grad for layer in outputs.decoder_hidden_states][:-1]
+
+                model.zero_grad() # clean gradients
+                intermediate_loss.backward(retain_graph=True)
+                intermediate_partial_grad = [layer.grad for layer in outputs.decoder_hidden_states][:-1]
+                
+                # # normalize gradients
+                # for i in range(len(main_partial_grad)):
+                #     main_partial_grad[i] = main_partial_grad[i] / (torch.norm(main_partial_grad[i]) + 1e-6)
+                #     intermediate_partial_grad[i] = intermediate_partial_grad[i] / (torch.norm(intermediate_partial_grad[i]) + 1e-6)
+                
+                # compute the cosine similarity between two gradient
+                cosine_similarity = torch.nn.functional.cosine_similarity(torch.flatten(torch.stack(main_partial_grad), start_dim=1), torch.flatten(torch.stack(intermediate_partial_grad), start_dim=1), dim=-1)
+                alpha = max(0, cosine_similarity.mean().item()) 
+
+            loss = main_loss + alpha * intermediate_loss         
             loss.backward()
             loss_num = loss.item()
-            pbar(step, {'loss': loss_num})
-            tr_loss += loss_num
+            pbar(step, {'loss': loss_num, 'alpha': alpha})
+            total_loss += loss_num
 
             if (step + 1) % args.gradient_accumulation_steps == 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
@@ -193,14 +218,13 @@ def train(args):
                 scheduler.step()  # Update learning rate schedule
                 model.zero_grad()
                 global_step += 1
-        
+
         if args.n_gpus > 1:
             dist.barrier()
         
         if args.local_rank in [-1, 0]:
             logging.info("Epoch %d loss: %.3f" % (epoch_i, loss_num))
             current_acc, _ = validate(args, model, val_loader, device, tokenizer)
-            print("Current best performance on validation set: %f" % (current_acc))
         
         if args.local_rank in [-1, 0] and current_acc > best_acc:
             epochs_not_improving = 0
@@ -223,77 +247,89 @@ def train(args):
             logging.info("Saving optimizer and scheduler states to %s", output_dir)
             
         if args.customized:
-            if 'cuda' in str(device):
-                torch.cuda.empty_cache()
+            if args.alpha_decay == "dynamic":
+                alpha = ( 1 + ( args.num_train_epochs // 2 - epoch_i ) / args.num_train_epochs // 2 ) ** 2 / 2
             
-            deltas = []
-            print("Adjusting intermediate weights...")
-            model.train()
-            sampled_data = iter(train_loader)
-            for i in range(args.sample_number):
-                ad_batch = next(sampled_data)
-                model.zero_grad()
-                ad_batch = tuple(t.to(device) for t in ad_batch)
-                pad_token_id = tokenizer.pad_token_id
-                source_ids, source_mask, intermediate, intermediate_mask, y = ad_batch[0], ad_batch[1], ad_batch[2], ad_batch[3], ad_batch[4]
-                intermediate_labels = intermediate[:, 1:].clone()
-                intermediate_labels[intermediate[:, 1:] == pad_token_id] = -100
-                intermediate_masks = intermediate_mask[:, 1:].clone()
-                y_ids = y[:, :-1].contiguous()
-                labels = y[:, 1:].clone()
-                labels[y[:, 1:] == pad_token_id] = -100
-                inputs = {
-                    "input_ids": source_ids.to(device),
-                    "attention_mask": source_mask.to(device),
-                    "decoder_input_ids": y_ids.to(device),
-                    "intermediate_labels": intermediate_labels.to(device),
-                    "intermediate_masks": intermediate_masks.to(device),
-                    "labels": labels.to(device),
-                    "alpha": alpha,
-                }
-                outputs = model(**inputs)
-                target_loss, intermediate_loss = outputs[-2], outputs[-1]
+            elif args.alpha_decay == "greedy":
+                if 'cuda' in str(device):
+                    torch.cuda.empty_cache()
+
                 if args.n_gpus > 1:
-                    target_loss = target_loss.sum()
-                    intermediate_loss = intermediate_loss.sum()
+                    dist.barrier()
+                
+                deltas = []
+                print("Adjusting intermediate weights...")
+                model.train()
+                sampled_data = iter(train_loader)
+                for i in range(args.sample_number):
+                    ad_batch = next(sampled_data)
+                    model.zero_grad()
+                    ad_batch = tuple(t.to(device) for t in ad_batch)
+                    pad_token_id = tokenizer.pad_token_id
+                    source_ids, source_mask, intermediate, intermediate_mask, y = ad_batch[0], ad_batch[1], ad_batch[2], ad_batch[3], ad_batch[4]
+                    intermediate_labels = intermediate[:, 1:].clone()
+                    intermediate_labels[intermediate[:, 1:] == pad_token_id] = -100
+                    intermediate_masks = intermediate_mask[:, 1:].clone()
+                    y_ids = y[:, :-1].contiguous()
+                    labels = y[:, 1:].clone()
+                    labels[y[:, 1:] == pad_token_id] = -100
+                    inputs = {
+                        "input_ids": source_ids.to(device),
+                        "attention_mask": source_mask.to(device),
+                        "decoder_input_ids": y_ids.to(device),
+                        "intermediate_labels": intermediate_labels.to(device),
+                        "intermediate_masks": intermediate_masks.to(device),
+                        "labels": labels.to(device),
+                        "alpha": alpha,
+                    }
+                    outputs = model(**inputs)
+                    main_loss, intermediate_loss = outputs.main_loss, outputs.intermediate_loss
+                    if args.n_gpus > 1:
+                        main_loss = main_loss.sum()
+                        intermediate_loss = intermediate_loss.sum()
 
-                intermediate_loss = alpha * intermediate_loss # to avoid unused param error
-                intermediate_loss.backward()
-                optimizer.step()
-                model.zero_grad()
-                outputs = model(**inputs)
-                updated_target_loss = outputs[-2]
+                    intermediate_loss = alpha * intermediate_loss + 0 * main_loss # to avoid unused param error
+                    intermediate_loss.backward()
+                    optimizer.step()
+                    model.zero_grad()
+                    outputs = model(**inputs)
+                    updated_main_loss = outputs[-2]
+                    if args.n_gpus > 1:
+                        updated_main_loss = updated_main_loss.sum()
+                    delta = main_loss.item() / updated_main_loss.item()
+                    deltas.append(delta)
+                    model.zero_grad()
+
+                assert len(deltas) == args.sample_number
+                deltas = torch.tensor(deltas).to(device)
+                s = torch.cuda.Stream()
                 if args.n_gpus > 1:
-                    updated_target_loss = updated_target_loss.sum()
-                delta = target_loss.item() / updated_target_loss.item()
-                deltas.append(delta)
-                model.zero_grad()
+                    handle = dist.all_reduce(deltas, async_op=True)
+                    handle.wait()
+                    with torch.cuda.stream(s):
+                        s.wait_stream(torch.cuda.default_stream())
+                    deltas = deltas / args.n_gpus
 
-            assert len(deltas) == args.sample_number
-            deltas = torch.tensor(deltas).to(device)
-            s = torch.cuda.Stream()
-            if args.n_gpus > 1:
-                handle = dist.all_reduce(deltas, async_op=True)
-                handle.wait()
-                with torch.cuda.stream(s):
-                    s.wait_stream(torch.cuda.default_stream())
-                deltas = deltas / args.n_gpus
+                alpha = min(alpha * ((sum(deltas) / len(deltas))**args.adjustment_step), args.max_alpha)
+                if args.local_rank in [-1, 0]:
+                    logging.info("The updated alpha is: %f" % alpha)
+            
+            model.zero_grad()
+            torch.cuda.empty_cache()
 
-            alpha = min(alpha * ((sum(deltas) / len(deltas))**args.adjustment_step), args.max_alpha)
-            if args.local_rank in [-1, 0]:
-                logging.info("The updated alpha is: %f" % alpha)
         
         if args.n_gpus > 1:
             dist.barrier()
 
         if 'cuda' in str(device):
             torch.cuda.empty_cache()
+        
         if epochs_not_improving > args.early_stopping:
             logging.info("%d epochs not improving, training early stopped" % epochs_not_improving)
             dist.destroy_process_group()
-            return global_step, tr_loss / global_step
+            return global_step, total_loss / global_step
         
-    return global_step, tr_loss / global_step
+    return global_step, total_loss / global_step
 
 
 def main():
@@ -328,10 +364,13 @@ def main():
 
     # special parameters
     parser.add_argument('--customized', action='store_true')
+    parser.add_argument('--shared_lm', action='store_true')
     parser.add_argument('--hybrid', action='store_true')
+    parser.add_argument('--alpha_decay', default="adaptive", choices=['static', 'dynamic', 'balanced', 'adaptive', 'greedy'])
+    
     parser.add_argument('--adjustment_step', default=2, type=float)
     parser.add_argument("--sample_number", default=10, type=int)
-    parser.add_argument("--max_alpha", default=1.5, type=float)
+    parser.add_argument("--max_alpha", default=2, type=float)
 
     parser.add_argument('--local_rank', default=-1, type=int)
     parser.add_argument('--port', default=12355, type=int)
@@ -346,6 +385,7 @@ def main():
     rootLogger.addHandler(fileHandler)
 
     seed_everything(args.seed)
+    args.inference = False
 
     # distributed data parallel   
     args.n_gpus = torch.cuda.device_count()
