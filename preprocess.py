@@ -40,6 +40,22 @@ def encode_dataset(args, dataset, tokenizer):
                     temp_ids.append(i)
                     j += 1
         return checked_ids
+    
+    def prepare_long_supervision(intermediate_targets):
+        intermediate_targets = tokenizer.batch_encode_plus(intermediate_targets, max_length = max_seq_length, padding='max_length', truncation = True)
+        intermediate_target_ids = np.array(intermediate_targets['input_ids'], dtype=np.int32)
+        intermediate_target_mask = np.zeros_like(intermediate_target_ids, dtype=np.int32)
+        
+        print("Masking tokens...")
+        for i in tqdm(range(len(intermediate_key_info))):
+            for j in range(len(intermediate_key_info[i])):
+                key_ids = tokenizer.encode(intermediate_key_info[i][j])[1:-1]
+                mask_ids = get_mask_ids(key_ids, intermediate_target_ids[i])
+                np.put(intermediate_target_mask[i], mask_ids, 1)
+                eos_pos = intermediate_target_ids[i].tolist().index(tokenizer.eos_token_id)
+                intermediate_target_mask[i][0] = 1
+                intermediate_target_mask[i][eos_pos] = 1
+        return intermediate_targets, intermediate_target_ids, intermediate_target_mask
 
     inputs = []
     targets = []
@@ -90,33 +106,13 @@ def encode_dataset(args, dataset, tokenizer):
             intermediate_target_mask = np.array(intermediate_targets['attention_mask'], dtype=np.int32)
         
         elif args.supervision_form == "long":
-            intermediate_targets = tokenizer.batch_encode_plus(intermediate_targets, max_length = max_seq_length, padding='max_length', truncation = True)
-            intermediate_target_ids = np.array(intermediate_targets['input_ids'], dtype=np.int32)
-            intermediate_target_mask = np.zeros_like(intermediate_target_ids, dtype=np.int32)
+            intermediate_targets, intermediate_target_ids, intermediate_target_mask = prepare_long_supervision(intermediate_targets)
             
-            print("Masking tokens...")
-            for i in tqdm(range(len(intermediate_key_info))):
-                for j in range(len(intermediate_key_info[i])):
-                    key_ids = tokenizer.encode(intermediate_key_info[i][j])[1:-1]
-                    mask_ids = get_mask_ids(key_ids, intermediate_target_ids[i])
-                    np.put(intermediate_target_mask[i], mask_ids, 1)
-                    eos_pos = intermediate_target_ids[i].tolist().index(tokenizer.eos_token_id)
-                    np.put(intermediate_target_mask[i], np.arange(eos_pos, len(intermediate_target_mask[i])), 1)
-        
         elif args.supervision_form == "hybrid":
             intermediate_short_targets = tokenizer.batch_encode_plus(intermediate_short_targets, max_length = max_seq_length, padding='max_length', truncation = True)
             intermediate_short_target_ids = np.array(intermediate_short_targets['input_ids'], dtype=np.int32)
             intermediate_short_target_mask = np.array(intermediate_short_targets['attention_mask'], dtype=np.int32)
-
-            intermediate_long_targets = tokenizer.batch_encode_plus(intermediate_long_targets, max_length = max_seq_length, padding='max_length', truncation = True)
-            intermediate_long_target_ids = np.array(intermediate_long_targets['input_ids'], dtype=np.int32)
-            intermediate_long_target_mask = np.zeros_like(intermediate_long_target_ids, dtype=np.int32)
-            print("Masking tokens...")
-            for i in tqdm(range(len(intermediate_key_info))):
-                for j in range(len(intermediate_key_info[i])):
-                    key_ids = tokenizer.encode(intermediate_key_info[i][j])[1:-1]
-                    mask_ids = get_mask_ids(key_ids, intermediate_long_target_ids[i])
-                    np.put(intermediate_long_target_mask[i], mask_ids, 1)           
+            intermediate_long_targets, intermediate_long_target_ids, intermediate_long_target_mask = prepare_long_supervision(intermediate_long_targets)
 
     extra_ids = np.array(extra_ids) if extra_ids else np.array([0]*len(inputs), dtype=np.int32)
     

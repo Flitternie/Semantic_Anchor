@@ -16,9 +16,10 @@ from transformers.models.t5.configuration_t5 import T5Config
 
 @dataclass
 class CustomizedSeq2SeqLMOutput(Seq2SeqLMOutput):
-    loss: Optional[torch.FloatTensor] = None
+    main_loss: Optional[torch.FloatTensor] = None
     logits: torch.FloatTensor = None
     intermediate_logits: torch.FloatTensor = None
+    extra_intermediate_logits: torch.FloatTensor = None
     past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
     decoder_hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     decoder_attentions: Optional[Tuple[torch.FloatTensor]] = None
@@ -26,8 +27,8 @@ class CustomizedSeq2SeqLMOutput(Seq2SeqLMOutput):
     encoder_last_hidden_state: Optional[torch.FloatTensor] = None
     encoder_hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     encoder_attentions: Optional[Tuple[torch.FloatTensor]] = None
-    main_loss: Optional[torch.FloatTensor] = None
     intermediate_loss: Optional[torch.FloatTensor] = None
+    extra_intermediate_loss: Optional[torch.FloatTensor] = None
 
 
 class CustomizedBartForConditionalGeneration(BartPretrainedModel):
@@ -44,8 +45,8 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
         self.num_hybrid_layers = 5
         self.shared_lm = True
         # self.intermediate_lm_layer = nn.Linear(config.d_model, self.model.shared.num_embeddings)
-        self.intermediate_weighting = nn.parameter.Parameter(torch.tensor([1.6, 0.8, 0.4, 0.2, 0.1]), requires_grad=True)
-        self.extra_intermediate_weighting = nn.parameter.Parameter(torch.ones(self.num_hybrid_layers), requires_grad=True)
+        self.intermediate_weighting = nn.parameter.Parameter(torch.tensor([1.0, 0.8, 0.6, 0.4, 0.2]), requires_grad=True)
+        self.extra_intermediate_weighting = nn.parameter.Parameter(torch.tensor([0.2, 0.4, 0.6, 0.8, 1.0]), requires_grad=True)
 
         self.init_weights()
 
@@ -150,7 +151,6 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
         output_attentions=None,
         output_hidden_states=True,
         return_dict=None,
-        alpha=0.0,
         extra_intermediate_labels=None,
         extra_intermediate_masks=None,
     ):
@@ -194,53 +194,43 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
             loss_fct = CrossEntropyLoss()
             masked_lm_loss = loss_fct(lm_logits.view(-1, self.config.vocab_size), labels.view(-1))
         
-        # add extra language model logits for computing intermediate loss
+        # computing intermediate loss for the first auxiliary task
         intermediate_decoder_weights = nn.functional.softmax(self.intermediate_weighting, dim=0)
         intermediate_decoder_outputs = nn.functional.linear(torch.stack(outputs['decoder_hidden_states'][1:self.num_hybrid_layers+1], dim=-1), intermediate_decoder_weights)
-        if self.shared_lm:
-            intermediate_lm_logits = self.lm_head(intermediate_decoder_outputs) + self.final_logits_bias
-        else:
-            intermediate_lm_logits = self.intermediate_lm_layer(intermediate_decoder_outputs) + self.final_logits_bias
+        intermediate_lm_logits = self.lm_head(intermediate_decoder_outputs) + self.final_logits_bias  
 
         masked_intermediate_lm_loss = None
-        masked_overall_lm_loss = None
-        if intermediate_labels is not None:
-            intermediate_loss_fct = CrossEntropyLoss()
-            
+        if intermediate_labels is not None:      
             new_intermediate_labels = intermediate_labels.clone()
             new_intermediate_labels[new_intermediate_labels == -100] = 1
             one_hot_intermediate_labels = F.one_hot(new_intermediate_labels, num_classes=self.config.vocab_size).float()
             intermediate_masks = intermediate_masks.bool().unsqueeze(-1).repeat(1, 1, self.config.vocab_size)
             new_intermediate_lm_logits = torch.where(intermediate_masks, intermediate_lm_logits, one_hot_intermediate_labels)
-            masked_intermediate_lm_loss = intermediate_loss_fct(new_intermediate_lm_logits.view(-1, self.config.vocab_size), new_intermediate_labels.view(-1))
-            # new_intermediate_labels = torch.where(intermediate_masks.bool(), new_intermediate_labels, -100)
-            # masked_intermediate_lm_loss = intermediate_loss_fct(intermediate_lm_logits.view(-1, self.config.vocab_size), intermediate_labels.view(-1))
-            masked_overall_lm_loss = masked_lm_loss + alpha * masked_intermediate_lm_loss
+            masked_intermediate_lm_loss = loss_fct(new_intermediate_lm_logits.view(-1, self.config.vocab_size), new_intermediate_labels.view(-1))
 
+        # computing intermediate loss for the second auxiliary task
+        extra_intermediate_decoder_weights = nn.functional.softmax(self.extra_intermediate_weighting, dim=0)
+        extra_intermediate_decoder_outputs = nn.functional.linear(torch.stack(outputs['decoder_hidden_states'][1:self.num_hybrid_layers+1], dim=-1), extra_intermediate_decoder_weights)
+        extra_intermediate_lm_logits = self.lm_head(extra_intermediate_decoder_outputs) + self.final_logits_bias
+
+        masked_extra_intermediate_lm_loss = None
         if extra_intermediate_labels is not None:
-            intermediate_decoder_weights = nn.functional.softmax(self.extra_intermediate_weighting, dim=0)
-            intermediate_decoder_outputs = nn.functional.linear(torch.stack(outputs['decoder_hidden_states'][1:self.num_hybrid_layers+1], dim=-1), intermediate_decoder_weights)
-            if self.shared_lm:
-                extra_intermediate_lm_logits = self.lm_head(intermediate_decoder_outputs) + self.final_logits_bias
-            else:
-                extra_intermediate_lm_logits = self.intermediate_lm_layer(intermediate_decoder_outputs) + self.final_logits_bias
-            
             new_extra_intermediate_labels = extra_intermediate_labels.clone()
             new_extra_intermediate_labels[new_extra_intermediate_labels == -100] = 1
             one_hot_extra_intermediate_labels = F.one_hot(new_extra_intermediate_labels, num_classes=self.config.vocab_size).float()
             extra_intermediate_masks = extra_intermediate_masks.bool().unsqueeze(-1).repeat(1,1,self.config.vocab_size)
             new_extra_intermediate_lm_logits = torch.where(extra_intermediate_masks, extra_intermediate_lm_logits, one_hot_extra_intermediate_labels)
-            masked_extra_intermediate_lm_loss = intermediate_loss_fct(new_extra_intermediate_lm_logits.view(-1, self.config.vocab_size), new_extra_intermediate_labels.view(-1))
-            masked_lm_loss = masked_lm_loss + alpha * masked_extra_intermediate_lm_loss
+            masked_extra_intermediate_lm_loss = loss_fct(new_extra_intermediate_lm_logits.view(-1, self.config.vocab_size), new_extra_intermediate_labels.view(-1))
 
         if not return_dict:
-            output = (lm_logits,) + (intermediate_lm_logits,) + outputs[1:]
-            return ((masked_overall_lm_loss,) + output) if masked_overall_lm_loss is not None else output
+            output = (lm_logits,) + outputs[1:]
+            return ((masked_lm_loss,) + output) if masked_lm_loss is not None else output
 
         return CustomizedSeq2SeqLMOutput(
-            loss=masked_overall_lm_loss,
+            main_loss=masked_lm_loss,
             logits=lm_logits,
             intermediate_logits=intermediate_lm_logits,
+            extra_intermediate_logits=extra_intermediate_lm_logits,
             past_key_values=outputs.past_key_values,
             decoder_hidden_states=outputs.decoder_hidden_states,
             decoder_attentions=outputs.decoder_attentions,
@@ -248,8 +238,8 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
             encoder_last_hidden_state=outputs.encoder_last_hidden_state,
             encoder_hidden_states=outputs.encoder_hidden_states,
             encoder_attentions=outputs.encoder_attentions,
-            main_loss=masked_lm_loss,
             intermediate_loss=masked_intermediate_lm_loss,
+            extra_intermediate_loss=masked_extra_intermediate_lm_loss,
         )
 
     def prepare_inputs_for_generation(
@@ -292,175 +282,3 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
                 tuple(past_state.index_select(0, beam_idx) for past_state in layer_past[:2]) + layer_past[2:],
             )
         return reordered_past
-
-
-class CustomizedT5ForConditionalGeneration(T5PreTrainedModel):
-    _keys_to_ignore_on_load_missing = [
-        r"encoder.embed_tokens.weight",
-        r"decoder.embed_tokens.weight",
-        r"lm_head.weight",
-    ]
-    _keys_to_ignore_on_load_unexpected = [
-        r"decoder.block.0.layer.1.EncDecAttention.relative_attention_bias.weight",
-    ]
-
-    def __init__(self, config: T5Config):
-        super().__init__(config)
-        self.model_dim = config.d_model
-
-        self.shared = nn.Embedding(config.vocab_size, config.d_model)
-
-        encoder_config = copy.deepcopy(config)
-        encoder_config.is_decoder = False
-        encoder_config.use_cache = False
-        encoder_config.is_encoder_decoder = False
-        self.encoder = T5Stack(encoder_config, self.shared)
-
-        decoder_config = copy.deepcopy(config)
-        decoder_config.is_decoder = True
-        decoder_config.is_encoder_decoder = False
-        decoder_config.num_layers = config.num_decoder_layers
-        self.decoder = T5Stack(decoder_config, self.shared)
-
-        self.model = T5Model(config)
-        self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
-
-        # Initialize weights and apply final processing
-        self.post_init()
-
-        # Model parallel
-        self.model_parallel = False
-        self.device_map = None
-
-        self.num_hybrid_layers = 5
-        self.intermediate_lm_head = nn.Linear(config.d_model, self.model.shared.num_embeddings, bias=True)
-        self.intermediate_weighting = nn.parameter.Parameter(torch.ones(self.num_hybrid_layers), requires_grad=True)
-        self.extra_intermediate_weighting = nn.parameter.Parameter(torch.ones(self.num_hybrid_layers),
-                                                                   requires_grad=True)
-
-    def get_input_embeddings(self):
-        return self.shared
-
-    def set_input_embeddings(self, new_embeddings):
-        self.shared = new_embeddings
-        self.encoder.set_input_embeddings(new_embeddings)
-        self.decoder.set_input_embeddings(new_embeddings)
-
-    def set_output_embeddings(self, new_embeddings):
-        self.lm_head = new_embeddings
-
-    def get_output_embeddings(self):
-        return self.lm_head
-
-    def get_encoder(self):
-        return self.encoder
-
-    def get_decoder(self):
-        return self.decoder
-
-    def forward(
-            self,
-            input_ids: Optional[torch.LongTensor] = None,
-            attention_mask: Optional[torch.FloatTensor] = None,
-            decoder_input_ids: Optional[torch.LongTensor] = None,
-            decoder_attention_mask: Optional[torch.BoolTensor] = None,
-            head_mask: Optional[torch.FloatTensor] = None,
-            decoder_head_mask: Optional[torch.FloatTensor] = None,
-            cross_attn_head_mask: Optional[torch.Tensor] = None,
-            encoder_outputs: Optional[Tuple[Tuple[torch.Tensor]]] = None,
-            past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
-            inputs_embeds: Optional[torch.FloatTensor] = None,
-            decoder_inputs_embeds: Optional[torch.FloatTensor] = None,
-            labels: Optional[torch.LongTensor] = None,
-            use_cache: Optional[bool] = None,
-            output_attentions: Optional[bool] = None,
-            output_hidden_states: Optional[bool] = None,
-            intermediate_labels=None,
-            intermediate_masks=None,
-            return_dict: Optional[bool] = None,
-            alpha=0.0,
-            extra_intermediate_labels=None,
-            extra_intermediate_masks=None,
-
-    ) -> Union[Tuple[torch.FloatTensor], Seq2SeqLMOutput]:
-
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        outputs = self.model(
-            input_ids,
-            attention_mask=attention_mask,
-            decoder_input_ids=decoder_input_ids,
-            output_hidden_states=True,
-            return_dict=return_dict,
-        )
-
-        lm_logits = self.lm_head(outputs[0])
-        masked_lm_loss = None
-
-        if labels is not None:
-            loss_fct = CrossEntropyLoss()
-            masked_lm_loss = loss_fct(lm_logits.view(-1, self.config.vocab_size), labels.view(-1))
-
-        # add extra language model logits for computing intermediate loss
-        intermediate_decoder_weights = nn.functional.softmax(self.intermediate_weighting, dim=0)
-        intermediate_decoder_outputs = nn.functional.linear(
-            torch.stack(outputs['decoder_hidden_states'][1:self.num_hybrid_layers + 1], dim=-1),
-            intermediate_decoder_weights)
-        intermediate_lm_logits = self.lm_head(intermediate_decoder_outputs)
-
-        masked_intermediate_lm_loss = None
-        masked_overall_lm_loss = None
-        if intermediate_labels is not None:
-            intermediate_loss_fct = CrossEntropyLoss()
-
-            new_intermediate_labels = intermediate_labels.clone()
-            new_intermediate_labels[new_intermediate_labels == -100] = 1
-            one_hot_intermediate_labels = F.one_hot(new_intermediate_labels, num_classes=self.config.vocab_size).float()
-            intermediate_masks = intermediate_masks.bool().unsqueeze(-1).repeat(1, 1, self.config.vocab_size)
-            new_intermediate_lm_logits = torch.where(intermediate_masks, intermediate_lm_logits,
-                                                     one_hot_intermediate_labels)
-            masked_intermediate_lm_loss = intermediate_loss_fct(
-                new_intermediate_lm_logits.view(-1, self.config.vocab_size), new_intermediate_labels.view(-1))
-            masked_overall_lm_loss = masked_lm_loss + alpha * masked_intermediate_lm_loss
-
-        if extra_intermediate_labels is not None:
-            intermediate_decoder_weights = nn.functional.softmax(self.extra_intermediate_weighting, dim=0)
-            intermediate_decoder_outputs = nn.functional.linear(
-                torch.stack(outputs['decoder_hidden_states'][1:self.num_hybrid_layers + 1], dim=-1),
-                intermediate_decoder_weights)
-            extra_intermediate_lm_logits = self.lm_head(intermediate_decoder_outputs)
-
-            new_extra_intermediate_labels = extra_intermediate_labels.clone()
-            new_extra_intermediate_labels[new_extra_intermediate_labels == -100] = 1
-            one_hot_extra_intermediate_labels = F.one_hot(new_extra_intermediate_labels,
-                                                          num_classes=self.config.vocab_size).float()
-            extra_intermediate_masks = extra_intermediate_masks.bool().unsqueeze(-1).repeat(1, 1,
-                                                                                            self.config.vocab_size)
-            new_extra_intermediate_lm_logits = torch.where(extra_intermediate_masks, extra_intermediate_lm_logits,
-                                                           one_hot_extra_intermediate_labels)
-            masked_extra_intermediate_lm_loss = intermediate_loss_fct(
-                new_extra_intermediate_lm_logits.view(-1, self.config.vocab_size),
-                new_extra_intermediate_labels.view(-1))
-            masked_lm_loss = masked_lm_loss + alpha * masked_extra_intermediate_lm_loss
-
-        if not return_dict:
-            output = (lm_logits,) + (intermediate_lm_logits,) + outputs[1:]
-            return ((masked_overall_lm_loss,) + output) if masked_overall_lm_loss is not None else output
-
-        return CustomizedSeq2SeqLMOutput(
-            loss=masked_overall_lm_loss,
-            logits=lm_logits,
-            intermediate_logits=intermediate_lm_logits,
-            past_key_values=outputs.past_key_values,
-            decoder_hidden_states=outputs.decoder_hidden_states,
-            decoder_attentions=outputs.decoder_attentions,
-            cross_attentions=outputs.cross_attentions,
-            encoder_last_hidden_state=outputs.encoder_last_hidden_state,
-            encoder_hidden_states=outputs.encoder_hidden_states,
-            encoder_attentions=outputs.encoder_attentions,
-            main_loss=masked_lm_loss,
-            intermediate_loss=masked_intermediate_lm_loss,
-        )
-
-
-

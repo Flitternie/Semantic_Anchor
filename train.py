@@ -80,9 +80,6 @@ def train(args):
         logging.info("Initiating model parameters.........")
     model = model_class.from_pretrained(args.ckpt) if args.ckpt else model_class.from_pretrained(args.model_name_or_path)
     model.resize_token_embeddings(len(tokenizer))
-
-    if args.shared_lm:
-        model.shared_lm = True
     
     if args.n_gpus > 1:
         model = nn.SyncBatchNorm.convert_sync_batchnorm(model).cuda()
@@ -125,11 +122,11 @@ def train(args):
     global_step = 0
     total_loss = 0.0
     best_acc, current_acc = 0.0, 0.0
-    alpha = 1
+    aux_w_1, aux_w_2 = 1.0, 1.0
 
     model.zero_grad()
     if args.local_rank in [-1, 0]:
-        # current_acc, _ = validate(args, model, val_loader, device, tokenizer)
+        current_acc, _ = validate(args, model, val_loader, device, tokenizer)
         print("Current performance on validation set: %f" % (current_acc))
     
     epochs_not_improving = 0
@@ -153,6 +150,7 @@ def train(args):
                     extra_intermediate_labels[extra_intermediate_ids[:, 1:] == pad_token_id] = -100
                     extra_intermediate_masks = extra_intermediate_mask[:, 1:].clone()
                 else:
+                    assert len(batch) == 6
                     source_ids, source_mask, intermediate_ids, intermediate_mask, y = batch[0], batch[1], batch[2], batch[3], batch[4]
                 intermediate_labels = intermediate_ids[:, 1:].clone()
                 intermediate_labels[intermediate_ids[:, 1:] == pad_token_id] = -100
@@ -160,7 +158,6 @@ def train(args):
 
             else:
                 source_ids, source_mask, y = batch[0], batch[1], batch[-2]
-                print(tokenizer.decode(y[0]))
             y_ids = y[:, :-1].contiguous()
             labels = y[:, 1:].clone()
             labels[y[:, 1:] == pad_token_id] = -100
@@ -174,42 +171,77 @@ def train(args):
             if args.customized:
                 inputs["intermediate_labels"] = intermediate_labels.to(device)
                 inputs["intermediate_masks"] = intermediate_masks.to(device)
-                inputs["alpha"] = alpha
                 if args.hybrid:
                     inputs["extra_intermediate_labels"] = extra_intermediate_labels.to(device)
                     inputs["extra_intermediate_masks"] = extra_intermediate_masks.to(device)
 
             outputs = model(**inputs)
-            # loss = outputs.loss
-            main_loss, intermediate_loss = outputs.main_loss, outputs.intermediate_loss
+            
+            if args.customized:
+                main_loss, intermediate_loss = outputs.main_loss, outputs.intermediate_loss
+                if args.hybrid:
+                    extra_intermediate_loss = outputs.extra_intermediate_loss
+            else:
+                main_loss = outputs.loss 
+
             if args.n_gpus > 1:
                 main_loss = main_loss.mean()
-                intermediate_loss = intermediate_loss.mean()
+                if args.customized:
+                    intermediate_loss = intermediate_loss.mean()
+                    if args.hybrid:
+                        extra_intermediate_loss = extra_intermediate_loss.mean()
 
-            if args.alpha_decay == 'adaptive':
+            if args.customized and args.aux_weighting == 'adaptive':
                 for layer in outputs.decoder_hidden_states[:-1]:
                     layer.retain_grad()
 
                 main_loss.backward(retain_graph=True)
                 main_partial_grad = [layer.grad for layer in outputs.decoder_hidden_states][:-1]
-
                 model.zero_grad() # clean gradients
+                
                 intermediate_loss.backward(retain_graph=True)
                 intermediate_partial_grad = [layer.grad for layer in outputs.decoder_hidden_states][:-1]
+                model.zero_grad() # clean gradients
+
+                if args.hybrid:
+                    extra_intermediate_loss.backward(retain_graph=True)
+                    extra_intermediate_partial_grad = [layer.grad for layer in outputs.decoder_hidden_states][:-1]
+                    model.zero_grad() # clean gradients
+                
+                if 'cuda' in str(device):
+                    torch.cuda.empty_cache()
                 
                 # # normalize gradients
                 # for i in range(len(main_partial_grad)):
                 #     main_partial_grad[i] = main_partial_grad[i] / (torch.norm(main_partial_grad[i]) + 1e-6)
                 #     intermediate_partial_grad[i] = intermediate_partial_grad[i] / (torch.norm(intermediate_partial_grad[i]) + 1e-6)
+                #     if args.hybrid:
+                #         extra_intermediate_partial_grad[i] = extra_intermediate_partial_grad[i] / (torch.norm(extra_intermediate_partial_grad[i]) + 1e-6)
                 
                 # compute the cosine similarity between two gradient
                 cosine_similarity = torch.nn.functional.cosine_similarity(torch.flatten(torch.stack(main_partial_grad), start_dim=1), torch.flatten(torch.stack(intermediate_partial_grad), start_dim=1), dim=-1)
-                alpha = max(0, cosine_similarity.mean().item()) 
+                aux_w_1 = max(0, cosine_similarity.mean().item()) 
+                
+                if args.hybrid:
+                    cosine_similarity = torch.nn.functional.cosine_similarity(torch.flatten(torch.stack(main_partial_grad), start_dim=1), torch.flatten(torch.stack(extra_intermediate_partial_grad), start_dim=1), dim=-1)
+                    aux_w_2 = max(0, cosine_similarity.mean().item())
 
-            loss = main_loss + alpha * intermediate_loss         
+            loss = main_loss
+            if args.customized:
+                loss += aux_w_1 * intermediate_loss
+                if args.hybrid:
+                    loss += aux_w_2 * extra_intermediate_loss
+             
             loss.backward()
             loss_num = loss.item()
-            pbar(step, {'loss': loss_num, 'alpha': alpha})
+            
+            pbar_info = {'loss': loss_num}
+            if args.customized:
+                pbar_info['aux_w_1'] = aux_w_1
+                if args.hybrid:
+                    pbar_info['aux_w_2'] = aux_w_2
+            
+            pbar(step, pbar_info)
             total_loss += loss_num
 
             if (step + 1) % args.gradient_accumulation_steps == 0:
@@ -247,13 +279,14 @@ def train(args):
             logging.info("Saving optimizer and scheduler states to %s", output_dir)
             
         if args.customized:
-            if args.alpha_decay == "dynamic":
-                alpha = ( 1 + ( args.num_train_epochs // 2 - epoch_i ) / args.num_train_epochs // 2 ) ** 2 / 2
+            if args.aux_weighting == "dynamic":
+                aux_w_1 = ( 1 + ( args.num_train_epochs // 2 - epoch_i ) / args.num_train_epochs // 2 ) ** 2 / 2
+                if args.hybrid:
+                    aux_w_2 = ( 1 + ( args.num_train_epochs // 2 - epoch_i ) / args.num_train_epochs // 2 ) ** 2 / 2
             
-            elif args.alpha_decay == "greedy":
+            elif args.aux_weighting == "greedy":
                 if 'cuda' in str(device):
                     torch.cuda.empty_cache()
-
                 if args.n_gpus > 1:
                     dist.barrier()
                 
@@ -317,7 +350,6 @@ def train(args):
             model.zero_grad()
             torch.cuda.empty_cache()
 
-        
         if args.n_gpus > 1:
             dist.barrier()
 
@@ -366,7 +398,7 @@ def main():
     parser.add_argument('--customized', action='store_true')
     parser.add_argument('--shared_lm', action='store_true')
     parser.add_argument('--hybrid', action='store_true')
-    parser.add_argument('--alpha_decay', default="adaptive", choices=['static', 'dynamic', 'balanced', 'adaptive', 'greedy'])
+    parser.add_argument('--aux_weighting', default="adaptive", choices=['static', 'dynamic', 'balanced', 'adaptive', 'greedy'])
     
     parser.add_argument('--adjustment_step', default=2, type=float)
     parser.add_argument("--sample_number", default=10, type=int)
@@ -400,7 +432,6 @@ def main():
     if args.local_rank in [-1, 0]:
         for k, v in vars(args).items():
             logging.info(k+':'+str(v))
-
 
     train(args)
     

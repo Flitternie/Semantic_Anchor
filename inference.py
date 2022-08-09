@@ -39,6 +39,7 @@ def validate(args, model, data, device, tokenizer):
     except:
         raise Exception('Error loading config file')
 
+    args.tokenizer = tokenizer
     model.eval()
     model = model.module if hasattr(model, "module") else model
 
@@ -49,9 +50,12 @@ def validate(args, model, data, device, tokenizer):
     if args.customized:
         all_intermediate_outputs = []
         all_intermediate_targets = []
-        sublayer_outputs = [[] for _ in range(model.num_hybrid_layers)]
+        # sublayer_outputs = [[] for _ in range(model.num_hybrid_layers)]
         logging.info(nn.functional.softmax(model.intermediate_weighting).cpu().tolist()) # weighting for intermediate layers
-        # print(model.hybrid_decoder_distribution.weight.cpu().tolist()) # weighting for hybrid layers
+        if args.hybrid:
+            all_extra_intermediate_outputs = []
+            all_extra_intermediate_targets = []
+            logging.info(nn.functional.softmax(model.extra_intermediate_weighting).cpu().tolist()) # weighting for intermediate layers
 
     with torch.no_grad():
         for batch in tqdm(data, total=len(data)):
@@ -64,7 +68,7 @@ def validate(args, model, data, device, tokenizer):
                 source_ids, _, target_ids, extra_ids = [x.to(device) for x in batch]
 
             if args.customized:
-                full_outputs = model.module.forward(
+                outputs = model.module.forward(
                     input_ids=source_ids,
                     use_cache=True,
                     return_dict=True
@@ -73,12 +77,16 @@ def validate(args, model, data, device, tokenizer):
                     use_cache=True,
                     return_dict=True
                 )
-                intermediate_outputs = torch.argmax(full_outputs.intermediate_logits, dim=-1).cpu().numpy()
-                for i in range(model.num_hybrid_layers):
-                    sublayer_logits = model.lm_head(full_outputs.decoder_hidden_states[i+1]) + model.final_logits_bias
-                    sublayer_outputs[i].extend(clean(torch.argmax(sublayer_logits, dim=-1).cpu().numpy()))
+                intermediate_outputs = torch.argmax(outputs.intermediate_logits, dim=-1).cpu().numpy()
+                # for i in range(model.num_hybrid_layers):
+                #     sublayer_logits = model.lm_head(outputs.decoder_hidden_states[i+1]) + model.final_logits_bias
+                #     sublayer_outputs[i].extend(clean(torch.argmax(sublayer_logits, dim=-1).cpu().numpy()))
                 all_intermediate_outputs.extend(clean(intermediate_outputs))
                 all_intermediate_targets.extend(intermediate_target_ids.cpu().numpy())
+                if args.hybrid:
+                    extra_intermediate_outputs = torch.argmax(outputs.extra_intermediate_logits, dim=-1).cpu().numpy()
+                    all_extra_intermediate_outputs.extend(clean(extra_intermediate_outputs))
+                    all_extra_intermediate_targets.extend(extra_intermediate_target_ids.cpu().numpy())
 
             outputs = model.module.generate(
                 input_ids=source_ids,
@@ -99,18 +107,19 @@ def validate(args, model, data, device, tokenizer):
             all_extra_ids.extend(extra_ids.cpu().numpy())
 
         assert len(all_outputs) == len(all_targets)
-
-        outputs = [tokenizer.decode(output_id, skip_special_tokens = True, clean_up_tokenization_spaces = False) for output_id in all_outputs]
-        targets = [tokenizer.decode(target_id, skip_special_tokens = True, clean_up_tokenization_spaces = False) for target_id in all_targets]
-
+        outputs = tokenizer.batch_decode(all_outputs, skip_special_tokens = True, clean_up_tokenization_spaces = False) 
+        targets = tokenizer.batch_decode(all_targets, skip_special_tokens = True, clean_up_tokenization_spaces = False) 
 
         print("Target sample sequence: %s " % targets[-1])
         print("Output sample sequence: %s " % outputs[-1])
         
         if args.customized:
-            all_intermediate_outputs = [tokenizer.decode(output_id, skip_special_tokens = True, clean_up_tokenization_spaces = False) for output_id in all_intermediate_outputs]
-            all_intermediate_targets = [tokenizer.decode(target_id, skip_special_tokens = True, clean_up_tokenization_spaces = False) for target_id in all_intermediate_targets]
-    
+            all_intermediate_outputs = tokenizer.batch_decode(all_intermediate_outputs, skip_special_tokens = False, clean_up_tokenization_spaces = False)
+            # all_intermediate_targets = [tokenizer.decode(target_id, skip_special_tokens = False, clean_up_tokenization_spaces = False) for target_id in all_intermediate_targets]
+            if args.hybrid:
+                all_extra_intermediate_outputs = tokenizer.batch_decode(all_extra_intermediate_outputs, skip_special_tokens = False, clean_up_tokenization_spaces = False)
+                # all_extra_intermediate_targets = [tokenizer.decode(target_id, skip_special_tokens = False, clean_up_tokenization_spaces = False) for target_id in all_extra_intermediate_targets]
+                
     with open(os.path.join(args.output_dir, 'output.txt'), 'w') as f:
         for output in outputs:
             f.write(output + '\n')
@@ -124,8 +133,11 @@ def validate(args, model, data, device, tokenizer):
         #     with open(os.path.join(args.output_dir, 'layer_%d_output.txt' % (i+1)), 'w') as f:
         #         for output in sublayer_output:
         #             f.write(output + '\n')
+        if args.hybrid:
+            with open(os.path.join(args.output_dir, 'extra_intermediate_output.txt'), 'w') as f:
+                for output in all_extra_intermediate_outputs:
+                    f.write(output + '\n')
         
-    args.tokenizer = tokenizer
     str_matching = np.mean([1 if p.strip() == g.strip() else 0 for p, g in zip(outputs, targets)])
     lf_matching = config.evaluate(args, outputs, targets, all_extra_ids, data)
     logging.info('Execution accuracy: {}, String matching accuracy: {}'.format(lf_matching, str_matching))
