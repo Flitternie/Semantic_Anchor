@@ -68,26 +68,44 @@ def validate(args, model, data, device, tokenizer):
                 source_ids, _, target_ids, extra_ids = [x.to(device) for x in batch]
 
             if args.customized:
-                outputs = model.module.forward(
+                model.output_mode = "intermediate"
+                intermediate_outputs = model.module.generate(
                     input_ids=source_ids,
                     use_cache=True,
-                    return_dict=True
-                ) if hasattr(model, "module") else model.forward(
+                    max_length=args.eval_max_length,
+                    num_beams=args.beam_size,
+                    length_penalty=1.0,
+                ) if hasattr(model, "module") else model.generate(
                     input_ids=source_ids,
                     use_cache=True,
-                    return_dict=True
+                    max_length=args.eval_max_length,
+                    num_beams=args.beam_size,
+                    length_penalty=1.0,
                 )
-                intermediate_outputs = torch.argmax(outputs.intermediate_logits, dim=-1).cpu().numpy()
                 # for i in range(model.num_hybrid_layers):
                 #     sublayer_logits = model.lm_head(outputs.decoder_hidden_states[i+1]) + model.final_logits_bias
                 #     sublayer_outputs[i].extend(clean(torch.argmax(sublayer_logits, dim=-1).cpu().numpy()))
-                all_intermediate_outputs.extend(clean(intermediate_outputs))
+                all_intermediate_outputs.extend(intermediate_outputs.cpu().numpy())
                 all_intermediate_targets.extend(intermediate_target_ids.cpu().numpy())
                 if args.hybrid:
-                    extra_intermediate_outputs = torch.argmax(outputs.extra_intermediate_logits, dim=-1).cpu().numpy()
-                    all_extra_intermediate_outputs.extend(clean(extra_intermediate_outputs))
+                    model.output_mode = "extra_intermediate"
+                    extra_intermediate_outputs = model.module.generate(
+                        input_ids=source_ids,
+                        use_cache=True,
+                        max_length=args.eval_max_length,
+                        num_beams=args.beam_size,
+                        length_penalty=1.0,
+                    ) if hasattr(model, "module") else model.generate(
+                        input_ids=source_ids,
+                        use_cache=True,
+                        max_length=args.eval_max_length,
+                        num_beams=args.beam_size,
+                        length_penalty=1.0,
+                    )
+                    all_extra_intermediate_outputs.extend(extra_intermediate_outputs.cpu().numpy())
                     all_extra_intermediate_targets.extend(extra_intermediate_target_ids.cpu().numpy())
 
+            model.output_mode = "default"
             outputs = model.module.generate(
                 input_ids=source_ids,
                 use_cache=True,

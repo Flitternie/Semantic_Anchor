@@ -220,11 +220,11 @@ def train(args):
                 
                 # compute the cosine similarity between two gradient
                 cosine_similarity = torch.nn.functional.cosine_similarity(torch.flatten(torch.stack(main_partial_grad), start_dim=1), torch.flatten(torch.stack(intermediate_partial_grad), start_dim=1), dim=-1)
-                aux_w_1 = max(0, cosine_similarity.mean().item()) * 0.5
+                aux_w_1 = max(1e-3, cosine_similarity.mean().item()) * 0.5
                 
                 if args.hybrid:
                     cosine_similarity = torch.nn.functional.cosine_similarity(torch.flatten(torch.stack(main_partial_grad), start_dim=1), torch.flatten(torch.stack(extra_intermediate_partial_grad), start_dim=1), dim=-1)
-                    aux_w_2 = max(0, cosine_similarity.mean().item()) * 0.5
+                    aux_w_2 = max(1e-3, cosine_similarity.mean().item()) * 0.5
             
             if args.n_gpus > 1:
                 dist.barrier()
@@ -316,7 +316,6 @@ def train(args):
                         "intermediate_labels": intermediate_labels.to(device),
                         "intermediate_masks": intermediate_masks.to(device),
                         "labels": labels.to(device),
-                        "alpha": alpha,
                     }
                     outputs = model(**inputs)
                     main_loss, intermediate_loss = outputs.main_loss, outputs.intermediate_loss
@@ -324,7 +323,7 @@ def train(args):
                         main_loss = main_loss.sum()
                         intermediate_loss = intermediate_loss.sum()
 
-                    intermediate_loss = alpha * intermediate_loss + 0 * main_loss # to avoid unused param error
+                    intermediate_loss = aux_w_1 * intermediate_loss + 0 * main_loss # to avoid unused param error
                     intermediate_loss.backward()
                     optimizer.step()
                     model.zero_grad()
@@ -346,9 +345,9 @@ def train(args):
                         s.wait_stream(torch.cuda.default_stream())
                     deltas = deltas / args.n_gpus
 
-                alpha = min(alpha * ((sum(deltas) / len(deltas))**args.adjustment_step), args.max_alpha)
+                aux_w_1 = min(aux_w_1 * ((sum(deltas) / len(deltas))**args.adjustment_step), args.max_alpha)
                 if args.local_rank in [-1, 0]:
-                    logging.info("The updated alpha is: %f" % alpha)
+                    logging.info("The updated aux_w_1 is: %f" % aux_w_1)
             
             model.zero_grad()
             torch.cuda.empty_cache()

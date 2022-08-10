@@ -40,11 +40,10 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
         
         # add extra language model head layers for intermediate supervision
         self.num_hybrid_layers = 5
-        self.shared_lm = True
         # self.intermediate_lm_layer = nn.Linear(config.d_model, self.model.shared.num_embeddings)
-        self.intermediate_weighting = nn.parameter.Parameter(torch.tensor([1.0, 0.8, 0.6, 0.4, 0.2]), requires_grad=True)
+        self.intermediate_weighting = nn.parameter.Parameter(torch.tensor([0.8, 1.0, 0.6, 0.4, 0.2]), requires_grad=True)
         self.extra_intermediate_weighting = nn.parameter.Parameter(torch.tensor([0.2, 0.4, 0.6, 0.8, 1.0]), requires_grad=True)
-
+        self.output_mode = "default"
         self.init_weights()
 
     def get_encoder(self):
@@ -218,6 +217,11 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
             extra_intermediate_masks = extra_intermediate_masks.bool().unsqueeze(-1).repeat(1,1,self.config.vocab_size)
             new_extra_intermediate_lm_logits = torch.where(extra_intermediate_masks, extra_intermediate_lm_logits, one_hot_extra_intermediate_labels)
             masked_extra_intermediate_lm_loss = loss_fct(new_extra_intermediate_lm_logits.view(-1, self.config.vocab_size), new_extra_intermediate_labels.view(-1))
+
+        if self.output_mode == "intermediate":
+            lm_logits = intermediate_lm_logits.clone()
+        elif self.output_mode == "extra_intermediate":
+            lm_logits = extra_intermediate_lm_logits.clone()
 
         if not return_dict:
             output = (lm_logits,) + outputs[1:]
