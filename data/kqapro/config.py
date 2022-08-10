@@ -29,7 +29,7 @@ def load_data(args):
 
 def evaluate(args, outputs, targets, all_extra_ids, data):
     kb = DataForSPARQL(os.path.join("./data/kqapro/data/", 'kb.json'))
-    given_answer = [[data.vocab['answer_idx_to_token'][a] for a in [al]] for al in all_extra_ids]
+    given_answer = [[data.vocab['answer_idx_to_token'][int(a)] for a in list(al)] for al in all_extra_ids]
     correct = 0
     for ans, pred, gold in tqdm(zip(given_answer, outputs, targets)):
         if pred == gold:

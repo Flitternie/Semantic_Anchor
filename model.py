@@ -11,9 +11,6 @@ from transformers.models.bart.modeling_bart import BartModel, BartPretrainedMode
 from transformers.models.bart.configuration_bart import BartConfig
 from transformers.file_utils import ModelOutput
 
-from transformers.models.t5.modeling_t5 import T5Model, T5PreTrainedModel, T5Stack
-from transformers.models.t5.configuration_t5 import T5Config
-
 @dataclass
 class CustomizedSeq2SeqLMOutput(Seq2SeqLMOutput):
     main_loss: Optional[torch.FloatTensor] = None
@@ -145,12 +142,12 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
         inputs_embeds=None,
         decoder_inputs_embeds=None,
         labels=None,
-        intermediate_labels=None,
-        intermediate_masks=None,
         use_cache=None,
         output_attentions=None,
         output_hidden_states=True,
         return_dict=None,
+        intermediate_labels=None,
+        intermediate_masks=None,
         extra_intermediate_labels=None,
         extra_intermediate_masks=None,
     ):

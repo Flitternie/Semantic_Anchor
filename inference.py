@@ -156,7 +156,7 @@ def inference(args):
     logging.info("Create train_loader and test_loader.........")
     vocab_json = os.path.join(args.input_dir, 'vocab.json')
     test_pt = os.path.join(args.input_dir, 'test.pt')
-    test_loader = DataLoader(vocab_json, test_pt, args.batch_size)
+    test_loader = DataLoader(vocab_json, test_pt, args.batch_size, training=False, hybrid=args.hybrid)
     
     logging.info("Create model.........")
     config_class, model_class, tokenizer_class = AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer

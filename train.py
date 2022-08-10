@@ -12,10 +12,10 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 
-from transformers import AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer, T5ForConditionalGeneration
+from transformers import AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer
 
 import transformers.utils.logging as transformers_logging 
-from model import CustomizedBartForConditionalGeneration, CustomizedT5ForConditionalGeneration
+from model import CustomizedBartForConditionalGeneration
 
 from utils.misc import seed_everything, ProgressBar
 from utils.lr_scheduler import get_linear_schedule_with_warmup
@@ -30,6 +30,12 @@ warnings.simplefilter("ignore")
 
 
 def train(args):
+    def _free_grad(model):
+        for layer in model:
+            if layer.grad is not None:
+                layer.grad.detach_()
+                layer.grad.zero_()
+
     if args.customized:
         from utils.data_customized import DataLoader, DistributedDataLoader, prepare_dataset
     else:
@@ -52,16 +58,10 @@ def train(args):
     
     if args.local_rank in [-1, 0]:
         logging.info("Create model.........")
-    if args.customized:
-        if "t5" in args.model_name_or_path:
-            _, model_class, tokenizer_class = (AutoConfig, CustomizedT5ForConditionalGeneration, AutoTokenizer)
-        else:
-            _, model_class, tokenizer_class = (AutoConfig, CustomizedBartForConditionalGeneration, AutoTokenizer)
+    if args.customized:        
+        _, model_class, tokenizer_class = (AutoConfig, CustomizedBartForConditionalGeneration, AutoTokenizer)
     else:
-        if "t5" in args.model_name_or_path:
-            _, model_class, tokenizer_class = (AutoConfig, T5ForConditionalGeneration, AutoTokenizer)
-        else:
-            _, model_class, tokenizer_class = (AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer)
+        _, model_class, tokenizer_class = (AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer)
     tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
 
     try:
@@ -83,7 +83,7 @@ def train(args):
     
     if args.n_gpus > 1:
         model = nn.SyncBatchNorm.convert_sync_batchnorm(model).cuda()
-        model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
+        model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=False)
     else:
         model = model.to(device)
 
@@ -126,7 +126,7 @@ def train(args):
 
     model.zero_grad()
     if args.local_rank in [-1, 0]:
-        current_acc, _ = validate(args, model, val_loader, device, tokenizer)
+        # current_acc, _ = validate(args, model, val_loader, device, tokenizer)
         print("Current performance on validation set: %f" % (current_acc))
     
     epochs_not_improving = 0
@@ -145,7 +145,7 @@ def train(args):
             if args.customized:
                 if args.hybrid:
                     assert len(batch) == 8
-                    source_ids, source_mask, extra_intermediate_ids, extra_intermediate_mask, intermediate_ids, intermediate_mask, y = batch[0], batch[1], batch[2], batch[3], batch[4], batch[5], batch[6]
+                    source_ids, source_mask, intermediate_ids, intermediate_mask, extra_intermediate_ids, extra_intermediate_mask, y = batch[0], batch[1], batch[2], batch[3], batch[4], batch[5], batch[6]
                     extra_intermediate_labels = extra_intermediate_ids[:, 1:].clone()
                     extra_intermediate_labels[extra_intermediate_ids[:, 1:] == pad_token_id] = -100
                     extra_intermediate_masks = extra_intermediate_mask[:, 1:].clone()
@@ -192,39 +192,42 @@ def train(args):
                         extra_intermediate_loss = extra_intermediate_loss.mean()
 
             if args.customized and args.aux_weighting == 'adaptive':
-                for layer in outputs.decoder_hidden_states[:-1]:
+                for layer in outputs.decoder_hidden_states:
                     layer.retain_grad()
 
                 main_loss.backward(retain_graph=True)
-                main_partial_grad = [layer.grad for layer in outputs.decoder_hidden_states][:-1]
-                model.zero_grad() # clean gradients
+                main_partial_grad = [layer.grad.clone() for layer in outputs.decoder_hidden_states][:-1]
+                _free_grad(outputs.decoder_hidden_states)
+                # model.zero_grad() # clean gradients
                 
                 intermediate_loss.backward(retain_graph=True)
-                intermediate_partial_grad = [layer.grad for layer in outputs.decoder_hidden_states][:-1]
-                model.zero_grad() # clean gradients
+                intermediate_partial_grad = [layer.grad.clone() for layer in outputs.decoder_hidden_states][:-1]
+                _free_grad(outputs.decoder_hidden_states)
+                # model.zero_grad() # clean gradients
 
                 if args.hybrid:
                     extra_intermediate_loss.backward(retain_graph=True)
-                    extra_intermediate_partial_grad = [layer.grad for layer in outputs.decoder_hidden_states][:-1]
-                    model.zero_grad() # clean gradients
+                    extra_intermediate_partial_grad = [layer.grad.clone() for layer in outputs.decoder_hidden_states][:-1]
+                    _free_grad(outputs.decoder_hidden_states)
+                    # model.zero_grad() # clean gradients
                 
-                if 'cuda' in str(device):
-                    torch.cuda.empty_cache()
-                
-                # # normalize gradients
-                # for i in range(len(main_partial_grad)):
-                #     main_partial_grad[i] = main_partial_grad[i] / (torch.norm(main_partial_grad[i]) + 1e-6)
-                #     intermediate_partial_grad[i] = intermediate_partial_grad[i] / (torch.norm(intermediate_partial_grad[i]) + 1e-6)
-                #     if args.hybrid:
-                #         extra_intermediate_partial_grad[i] = extra_intermediate_partial_grad[i] / (torch.norm(extra_intermediate_partial_grad[i]) + 1e-6)
+                # normalize gradients
+                for i in range(len(main_partial_grad)):
+                    main_partial_grad[i] = main_partial_grad[i] / (torch.norm(main_partial_grad[i]) + 1e-6)
+                    intermediate_partial_grad[i] = intermediate_partial_grad[i] / (torch.norm(intermediate_partial_grad[i]) + 1e-6)
+                    if args.hybrid:
+                        extra_intermediate_partial_grad[i] = extra_intermediate_partial_grad[i] / (torch.norm(extra_intermediate_partial_grad[i]) + 1e-6)
                 
                 # compute the cosine similarity between two gradient
                 cosine_similarity = torch.nn.functional.cosine_similarity(torch.flatten(torch.stack(main_partial_grad), start_dim=1), torch.flatten(torch.stack(intermediate_partial_grad), start_dim=1), dim=-1)
-                aux_w_1 = max(0, cosine_similarity.mean().item()) 
+                aux_w_1 = max(0, cosine_similarity.mean().item()) * 0.5
                 
                 if args.hybrid:
                     cosine_similarity = torch.nn.functional.cosine_similarity(torch.flatten(torch.stack(main_partial_grad), start_dim=1), torch.flatten(torch.stack(extra_intermediate_partial_grad), start_dim=1), dim=-1)
-                    aux_w_2 = max(0, cosine_similarity.mean().item())
+                    aux_w_2 = max(0, cosine_similarity.mean().item()) * 0.5
+            
+            if args.n_gpus > 1:
+                dist.barrier()
 
             loss = main_loss
             if args.customized:
@@ -396,7 +399,6 @@ def main():
 
     # special parameters
     parser.add_argument('--customized', action='store_true')
-    parser.add_argument('--shared_lm', action='store_true')
     parser.add_argument('--hybrid', action='store_true')
     parser.add_argument('--aux_weighting', default="adaptive", choices=['static', 'dynamic', 'balanced', 'adaptive', 'greedy'])
     
@@ -425,6 +427,7 @@ def main():
         args.local_rank = int(os.environ["LOCAL_RANK"])
         os.environ['MASTER_ADDR'] = 'localhost'
         os.environ['MASTER_PORT'] = str(args.port)
+        os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'INFO'
         dist.init_process_group(backend='nccl', world_size=args.n_gpus)
         torch.cuda.set_device(args.local_rank)
     

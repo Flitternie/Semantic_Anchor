@@ -7,7 +7,7 @@ class Dataset(torch.utils.data.Dataset):
     def __init__(self, inputs, hybrid=False):
         self.hybrid = hybrid
         if hybrid:
-            self.source_ids, self.source_mask, self.extra_intermediate_target_ids, self.extra_intermediate_target_mask, self.intermediate_target_ids, self.intermediate_target_mask, self.target_ids, self.extra_ids = inputs
+            self.source_ids, self.source_mask, self.intermediate_target_ids, self.intermediate_target_mask, self.extra_intermediate_target_ids, self.extra_intermediate_target_mask, self.target_ids, self.extra_ids = inputs
         else:
             self.source_ids, self.source_mask, self.intermediate_target_ids, self.intermediate_target_mask, self.target_ids, self.extra_ids = inputs
         
@@ -22,7 +22,7 @@ class Dataset(torch.utils.data.Dataset):
         target_ids = torch.LongTensor(self.target_ids[index])
         extra_ids = torch.LongTensor([self.extra_ids[index]])
         if self.hybrid:
-            return source_ids, source_mask, extra_intermediate_target_ids, extra_intermediate_target_mask, intermediate_target_ids, intermediate_target_mask, target_ids, extra_ids
+            return source_ids, source_mask, intermediate_target_ids, intermediate_target_mask, extra_intermediate_target_ids, extra_intermediate_target_mask, target_ids, extra_ids
         else:
             return source_ids, source_mask, intermediate_target_ids, intermediate_target_mask, target_ids, extra_ids
 
@@ -45,15 +45,15 @@ def collate(batch):
     if batch[-1][0] is None:
         intermediate_target_ids, intermediate_target_mask, target_ids, extra_ids = None, None, None, None
     else:
-        intermediate_target_ids = torch.stack(batch[-4])
-        intermediate_target_mask = torch.stack(batch[-3])
+        intermediate_target_ids = torch.stack(batch[2])
+        intermediate_target_mask = torch.stack(batch[3])
         target_ids = torch.stack(batch[-2])
         extra_ids = torch.cat(batch[-1])
         if len(batch) > 6:
-            extra_intermediate_target_ids = torch.stack(batch[-6])
-            extra_intermediate_target_mask = torch.stack(batch[-5])
+            extra_intermediate_target_ids = torch.stack(batch[4])
+            extra_intermediate_target_mask = torch.stack(batch[5])
     if len(batch) > 6:
-        return source_ids, source_mask, extra_intermediate_target_ids, extra_intermediate_target_mask, intermediate_target_ids, intermediate_target_mask, target_ids, extra_ids
+        return source_ids, source_mask, intermediate_target_ids, intermediate_target_mask, extra_intermediate_target_ids, extra_intermediate_target_mask, target_ids, extra_ids
     return source_ids, source_mask, intermediate_target_ids, intermediate_target_mask, target_ids, extra_ids
 
 def prepare_dataset(vocab_json, question_pt, training=False, hybrid=False):
