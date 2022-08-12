@@ -122,7 +122,7 @@ def train(args):
     global_step = 0
     total_loss = 0.0
     best_acc, current_acc = 0.0, 0.0
-    aux_w_1, aux_w_2 = 1.0, 1.0
+    aux_w_1, aux_w_2 = 0.2, 0.125
 
     model.zero_grad()
     if args.local_rank in [-1, 0]:
@@ -130,6 +130,9 @@ def train(args):
         print("Current performance on validation set: %f" % (current_acc))
     
     epochs_not_improving = 0
+
+    if args.hybrid:
+        model.hybrid = True
 
     for epoch_i in range(int(args.num_train_epochs)):
         if args.n_gpus > 1:
@@ -155,9 +158,9 @@ def train(args):
                 intermediate_labels = intermediate_ids[:, 1:].clone()
                 intermediate_labels[intermediate_ids[:, 1:] == pad_token_id] = -100
                 intermediate_masks = intermediate_mask[:, 1:].clone()
-
             else:
-                source_ids, source_mask, y = batch[0], batch[1], batch[-2]
+                source_ids, source_mask, y = batch[0], batch[1], batch[2]
+            
             y_ids = y[:, :-1].contiguous()
             labels = y[:, 1:].clone()
             labels[y[:, 1:] == pad_token_id] = -100
@@ -185,11 +188,11 @@ def train(args):
                 main_loss = outputs.loss 
 
             if args.n_gpus > 1:
-                main_loss = main_loss.mean()
+                main_loss = main_loss.sum()
                 if args.customized:
-                    intermediate_loss = intermediate_loss.mean()
+                    intermediate_loss = intermediate_loss.sum()
                     if args.hybrid:
-                        extra_intermediate_loss = extra_intermediate_loss.mean()
+                        extra_intermediate_loss = extra_intermediate_loss.sum()
 
             if args.customized and args.aux_weighting == 'adaptive':
                 for layer in outputs.decoder_hidden_states:

@@ -31,7 +31,7 @@ def evaluate(args, outputs, targets, all_extra_ids, data):
     kb = DataForSPARQL(os.path.join("./data/kqapro/data/", 'kb.json'))
     given_answer = [[data.vocab['answer_idx_to_token'][int(a)] for a in list(al)] for al in all_extra_ids]
     correct = 0
-    for ans, pred, gold in tqdm(zip(given_answer, outputs, targets)):
+    for ans, pred, gold in tqdm(zip(given_answer, outputs, targets), total=len(outputs)):
         if pred == gold:
             correct += 1
             continue

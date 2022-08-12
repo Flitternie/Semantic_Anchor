@@ -14,10 +14,10 @@ def load_data(args):
     val_set = json.load(open(os.path.join(args.input_dir, 'dev.json')))
     test_set = json.load(open(os.path.join(args.input_dir, 'test.json')))
     for question in chain(train_set, val_set, test_set):
-        question['input'] = "{} ; columns: {}".format(question['text_in'], " | ".join(question['table']['header']))
+        question['input'] = "question : {} ; database : {}".format(question['text_in'], " </s> ".join(question['table']['header']).lower())
         key_info = "<A> {} </A>".format(question['table']['header'][question['sql']['sel']]) 
         for i in range(len(question['sql']['conds']['column_index'])):
-            key_info += " <A> {} </A>".format(question['table']['header'][question['sql']['conds']['column_index'][i]])
+            key_info += " <A> {} </A>".format(question['table']['header'][question['sql']['conds']['column_index'][i]].lower())
         question['ir'] = key_info
         question['target'] = get_logical_form(question)
     return train_set, val_set, test_set

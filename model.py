@@ -37,13 +37,16 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
         self.model = BartModel(config)
         self.register_buffer("final_logits_bias", torch.zeros((1, self.model.shared.num_embeddings)))
         self.lm_head = nn.Linear(config.d_model, self.model.shared.num_embeddings, bias=False)
+
+        self.output_mode = "default"
+        self.hybrid = False
         
         # add extra language model head layers for intermediate supervision
         self.num_hybrid_layers = 5
         # self.intermediate_lm_layer = nn.Linear(config.d_model, self.model.shared.num_embeddings)
-        self.intermediate_weighting = nn.parameter.Parameter(torch.tensor([0.8, 1.0, 0.6, 0.4, 0.2]), requires_grad=True)
-        self.extra_intermediate_weighting = nn.parameter.Parameter(torch.tensor([0.2, 0.4, 0.6, 0.8, 1.0]), requires_grad=True)
-        self.output_mode = "default"
+        self.intermediate_weighting = nn.parameter.Parameter(torch.tensor([2.0, 0.8, 0.6, 0.4, 0.2]), requires_grad=True)
+        self.extra_intermediate_weighting = nn.parameter.Parameter(torch.tensor([0.2, 0.4, 0.6, 0.8, 2.0]), requires_grad=True)
+
         self.init_weights()
 
     def get_encoder(self):
@@ -205,18 +208,22 @@ class CustomizedBartForConditionalGeneration(BartPretrainedModel):
             masked_intermediate_lm_loss = loss_fct(new_intermediate_lm_logits.view(-1, self.config.vocab_size), new_intermediate_labels.view(-1))
 
         # computing intermediate loss for the second auxiliary task
-        extra_intermediate_decoder_weights = nn.functional.softmax(self.extra_intermediate_weighting, dim=0)
-        extra_intermediate_decoder_outputs = nn.functional.linear(torch.stack(outputs['decoder_hidden_states'][1:self.num_hybrid_layers+1], dim=-1), extra_intermediate_decoder_weights)
-        extra_intermediate_lm_logits = self.lm_head(extra_intermediate_decoder_outputs) + self.final_logits_bias
+        if self.hybrid:
+            extra_intermediate_decoder_weights = nn.functional.softmax(self.extra_intermediate_weighting, dim=0)
+            extra_intermediate_decoder_outputs = nn.functional.linear(torch.stack(outputs['decoder_hidden_states'][1:self.num_hybrid_layers+1], dim=-1), extra_intermediate_decoder_weights)
+            extra_intermediate_lm_logits = self.lm_head(extra_intermediate_decoder_outputs) + self.final_logits_bias
 
-        masked_extra_intermediate_lm_loss = None
-        if extra_intermediate_labels is not None:
-            new_extra_intermediate_labels = extra_intermediate_labels.clone()
-            new_extra_intermediate_labels[new_extra_intermediate_labels == -100] = 1
-            one_hot_extra_intermediate_labels = F.one_hot(new_extra_intermediate_labels, num_classes=self.config.vocab_size).float()
-            extra_intermediate_masks = extra_intermediate_masks.bool().unsqueeze(-1).repeat(1,1,self.config.vocab_size)
-            new_extra_intermediate_lm_logits = torch.where(extra_intermediate_masks, extra_intermediate_lm_logits, one_hot_extra_intermediate_labels)
-            masked_extra_intermediate_lm_loss = loss_fct(new_extra_intermediate_lm_logits.view(-1, self.config.vocab_size), new_extra_intermediate_labels.view(-1))
+            masked_extra_intermediate_lm_loss = None
+            if extra_intermediate_labels is not None:
+                new_extra_intermediate_labels = extra_intermediate_labels.clone()
+                new_extra_intermediate_labels[new_extra_intermediate_labels == -100] = 1
+                one_hot_extra_intermediate_labels = F.one_hot(new_extra_intermediate_labels, num_classes=self.config.vocab_size).float()
+                extra_intermediate_masks = extra_intermediate_masks.bool().unsqueeze(-1).repeat(1,1,self.config.vocab_size)
+                new_extra_intermediate_lm_logits = torch.where(extra_intermediate_masks, extra_intermediate_lm_logits, one_hot_extra_intermediate_labels)
+                masked_extra_intermediate_lm_loss = loss_fct(new_extra_intermediate_lm_logits.view(-1, self.config.vocab_size), new_extra_intermediate_labels.view(-1))
+        else:
+            extra_intermediate_lm_logits = None
+            masked_extra_intermediate_lm_loss = None
 
         if self.output_mode == "intermediate":
             lm_logits = intermediate_lm_logits.clone()

@@ -132,11 +132,11 @@ def validate(args, model, data, device, tokenizer):
         print("Output sample sequence: %s " % outputs[-1])
         
         if args.customized:
-            all_intermediate_outputs = tokenizer.batch_decode(all_intermediate_outputs, skip_special_tokens = False, clean_up_tokenization_spaces = False)
-            # all_intermediate_targets = [tokenizer.decode(target_id, skip_special_tokens = False, clean_up_tokenization_spaces = False) for target_id in all_intermediate_targets]
+            all_intermediate_outputs = tokenizer.batch_decode(all_intermediate_outputs, skip_special_tokens = True, clean_up_tokenization_spaces = False)
+            # all_intermediate_targets = [tokenizer.decode(target_id, skip_special_tokens = True, clean_up_tokenization_spaces = False) for target_id in all_intermediate_targets]
             if args.hybrid:
-                all_extra_intermediate_outputs = tokenizer.batch_decode(all_extra_intermediate_outputs, skip_special_tokens = False, clean_up_tokenization_spaces = False)
-                # all_extra_intermediate_targets = [tokenizer.decode(target_id, skip_special_tokens = False, clean_up_tokenization_spaces = False) for target_id in all_extra_intermediate_targets]
+                all_extra_intermediate_outputs = tokenizer.batch_decode(all_extra_intermediate_outputs, skip_special_tokens = True, clean_up_tokenization_spaces = False)
+                # all_extra_intermediate_targets = [tokenizer.decode(target_id, skip_special_tokens = True, clean_up_tokenization_spaces = False) for target_id in all_extra_intermediate_targets]
                 
     with open(os.path.join(args.output_dir, 'output.txt'), 'w') as f:
         for output in outputs:
