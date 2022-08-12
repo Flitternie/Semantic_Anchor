@@ -79,6 +79,7 @@ def train(args):
     if args.local_rank in [-1, 0]:
         logging.info("Initiating model parameters.........")
     model = model_class.from_pretrained(args.ckpt) if args.ckpt else model_class.from_pretrained(args.model_name_or_path)
+    model_type = type(model)
     model.resize_token_embeddings(len(tokenizer))
     
     if args.n_gpus > 1:
@@ -122,7 +123,7 @@ def train(args):
     global_step = 0
     total_loss = 0.0
     best_acc, current_acc = 0.0, 0.0
-    aux_w_1, aux_w_2 = 0.2, 0.125
+    aux_w_1, aux_w_2 = 0.2, 0.1
 
     model.zero_grad()
     if args.local_rank in [-1, 0]:
@@ -135,6 +136,7 @@ def train(args):
         model.hybrid = True
 
     for epoch_i in range(int(args.num_train_epochs)):
+        first_batch_intermediate_loss = 0.0
         if args.n_gpus > 1:
             train_loader.sampler.set_epoch(epoch_i)
         pbar = ProgressBar(n_total=len(train_loader), desc='Training')
@@ -158,9 +160,9 @@ def train(args):
                 intermediate_labels = intermediate_ids[:, 1:].clone()
                 intermediate_labels[intermediate_ids[:, 1:] == pad_token_id] = -100
                 intermediate_masks = intermediate_mask[:, 1:].clone()
+
             else:
-                source_ids, source_mask, y = batch[0], batch[1], batch[2]
-            
+                source_ids, source_mask, y = batch[0], batch[1], batch[-2]
             y_ids = y[:, :-1].contiguous()
             labels = y[:, 1:].clone()
             labels[y[:, 1:] == pad_token_id] = -100
@@ -185,14 +187,7 @@ def train(args):
                 if args.hybrid:
                     extra_intermediate_loss = outputs.extra_intermediate_loss
             else:
-                main_loss = outputs.loss 
-
-            if args.n_gpus > 1:
-                main_loss = main_loss.sum()
-                if args.customized:
-                    intermediate_loss = intermediate_loss.sum()
-                    if args.hybrid:
-                        extra_intermediate_loss = extra_intermediate_loss.sum()
+                main_loss = outputs[0]
 
             if args.customized and args.aux_weighting == 'adaptive':
                 for layer in outputs.decoder_hidden_states:
@@ -228,7 +223,13 @@ def train(args):
                 if args.hybrid:
                     cosine_similarity = torch.nn.functional.cosine_similarity(torch.flatten(torch.stack(main_partial_grad), start_dim=1), torch.flatten(torch.stack(extra_intermediate_partial_grad), start_dim=1), dim=-1)
                     aux_w_2 = max(1e-3, cosine_similarity.mean().item()) * 0.5
-            
+
+            elif args.customized and args.aux_weighting == 'balanced':
+                if step == 0:
+                    first_batch_intermediate_loss = intermediate_loss
+                else:
+                    aux_w_1 = aux_w_1 * (first_batch_intermediate_loss / intermediate_loss)**args.adjustment_step
+
             if args.n_gpus > 1:
                 dist.barrier()
 
@@ -402,7 +403,7 @@ def main():
     # special parameters
     parser.add_argument('--customized', action='store_true')
     parser.add_argument('--hybrid', action='store_true')
-    parser.add_argument('--aux_weighting', default="adaptive", choices=['static', 'dynamic', 'balanced', 'adaptive', 'greedy'])
+    parser.add_argument('--aux_weighting', default="static", choices=['static', 'dynamic', 'balanced', 'adaptive', 'greedy'])
     
     parser.add_argument('--adjustment_step', default=2, type=float)
     parser.add_argument("--sample_number", default=10, type=int)
