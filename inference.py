@@ -199,7 +199,6 @@ def inference(args):
         for output in outputs:
             f.write(output + "\n")
 
-            
 
 def main():
     parser = argparse.ArgumentParser()

@@ -123,7 +123,7 @@ def train(args):
     global_step = 0
     total_loss = 0.0
     best_acc, current_acc = 0.0, 0.0
-    aux_w_1, aux_w_2 = 0.2, 0.1
+    aux_w_1, aux_w_2 = 1, 1
 
     model.zero_grad()
     if args.local_rank in [-1, 0]:
@@ -133,10 +133,15 @@ def train(args):
     epochs_not_improving = 0
 
     if args.hybrid:
-        model.hybrid = True
+        if args.n_gpus > 1:
+            model.module.hybrid = True
+        else:
+            model.hybrid = True
 
     for epoch_i in range(int(args.num_train_epochs)):
         first_batch_intermediate_loss = 0.0
+        if args.hybrid:
+            first_batch_extra_loss = 0.0
         if args.n_gpus > 1:
             train_loader.sampler.set_epoch(epoch_i)
         pbar = ProgressBar(n_total=len(train_loader), desc='Training')
@@ -226,9 +231,13 @@ def train(args):
 
             elif args.customized and args.aux_weighting == 'balanced':
                 if step == 0:
-                    first_batch_intermediate_loss = intermediate_loss
+                    first_batch_intermediate_loss = intermediate_loss.item()
+                    if args.hybrid:
+                        first_batch_extra_loss = extra_intermediate_loss.item()
                 else:
-                    aux_w_1 = aux_w_1 * (first_batch_intermediate_loss / intermediate_loss)**args.adjustment_step
+                    aux_w_1 = aux_w_1 * ((first_batch_intermediate_loss / intermediate_loss.item())**args.adjustment_step - 0.001)
+                    if args.hybrid:
+                        aux_w_2 = aux_w_2 * ((first_batch_extra_loss / extra_intermediate_loss.item())**args.adjustment_step - 0.001)
 
             if args.n_gpus > 1:
                 dist.barrier()
@@ -403,9 +412,9 @@ def main():
     # special parameters
     parser.add_argument('--customized', action='store_true')
     parser.add_argument('--hybrid', action='store_true')
-    parser.add_argument('--aux_weighting', default="static", choices=['static', 'dynamic', 'balanced', 'adaptive', 'greedy'])
+    parser.add_argument('--aux_weighting', default="balanced", choices=['static', 'dynamic', 'balanced', 'adaptive', 'greedy'])
     
-    parser.add_argument('--adjustment_step', default=2, type=float)
+    parser.add_argument('--adjustment_step', default=1, type=float)
     parser.add_argument("--sample_number", default=10, type=int)
     parser.add_argument("--max_alpha", default=2, type=float)
 
