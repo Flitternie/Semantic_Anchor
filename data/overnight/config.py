@@ -1,27 +1,19 @@
-import random
+import json
 import os
 import logging
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
 from data.overnight.evaluator.domain_base import Domain
-from graphq_ir.overnight.translator import Translator
 
 special_tokens = []
 overnight_domains = ['basketball', 'blocks', 'calendar', 'housing', 'publications', 'recipes', 'restaurants', 'socialnetwork']
 
 def load_data(args):
     print('Load questions')
-    train_set, val_set, test_set = [], [], []
-    
-    for domain in overnight_domains:
-        idx = overnight_domains.index(domain)
-        train_data = read_overnight(os.path.join(args.input_dir, domain + '_train.tsv'), idx)
-        random.shuffle(train_data)
-        train_set += train_data[:int(len(train_data)*0.8)]
-        val_set += train_data[int(len(train_data)*0.8):]
-        test_set += read_overnight(os.path.join(args.input_dir, domain + '_test.tsv'), idx)
-    
+    train_set = json.load(open(os.path.join(args.input_dir, 'train.json')))
+    val_set = json.load(open(os.path.join(args.input_dir, 'val.json')))
+    test_set = json.load(open(os.path.join(args.input_dir, 'test.json')))
     return train_set, val_set, test_set
 
 def evaluate(args, outputs, targets, all_extra_ids, *xargs):
@@ -37,16 +29,5 @@ def evaluate(args, outputs, targets, all_extra_ids, *xargs):
         scores += domain_score
         logging.info("{}-domain accuracy: {}".format(overnight_domains[i], np.mean(domain_score)))
     return np.mean(scores)
-    
-def read_overnight(path, domain_idx):
-    ex_list = []
-    infile = pd.read_csv(path, sep='\t')
-    for idx, row in infile.iterrows():
-        ex_list.append({'input': row['utterance'].strip(), 'target': row['logical_form'].strip(), 'extra_id': domain_idx})
-    translator = Translator()
-    print('Translate {} examples'.format(len(ex_list)))
-    for ex in tqdm(ex_list):
-        ex['ir'] = translator.to_ir(ex['target'])
-    return ex_list
 
 

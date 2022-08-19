@@ -1,11 +1,13 @@
 .vscode
 .DS_Store
 
-data/agenda/
-data/*/data*/
-data/*/evaluator*/
+data*/*/*
+data/utils
+!data/*/utils/
+!data/*/*.py
+
 exp_*/
-new_exp_*/
+*exp_*/
 
 *.ipynb
 *.gz

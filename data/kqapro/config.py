@@ -7,14 +7,13 @@ from datetime import date
 from data.kqapro.utils.load_kb import DataForSPARQL
 from data.kqapro.utils.sparql_engine import get_sparql_answer
 
-special_tokens = []
+special_tokens = ['?', '^', '<', '>', '.', '"', '{', '}', ':', ';', '|', '!', '@', '#', '$', '%', '&', '*', '(', ')', '-', '_', '+', '=', '`', '~', '\'', ',']
 
 def load_data(args):
     print('Build kb vocabulary')
     vocab = {
         'answer_token_to_idx': {}
     }
-
     print('Load questions')
     train_set = json.load(open(os.path.join(args.input_dir, 'train.json')))
     val_set = json.load(open(os.path.join(args.input_dir, 'val.json')))
@@ -30,21 +29,19 @@ def load_data(args):
 
 def evaluate(args, outputs, targets, all_extra_ids, data):
     kb = DataForSPARQL(os.path.join("./data/kqapro/data/", 'kb.json'))
-    given_answer = [[data.vocab['answer_idx_to_token'][a] for a in [al]] for al in all_extra_ids]
-    count, correct = 0, 0
-    for ans, pred, gold in tqdm(zip(given_answer, outputs, targets)):
+    given_answer = [[data.vocab['answer_idx_to_token'][int(a)] for a in list(al)] for al in all_extra_ids]
+    correct = 0
+    for ans, pred, gold in tqdm(zip(given_answer, outputs, targets), total=len(outputs)):
         if pred == gold:
             correct += 1
             continue
-        pred = post_process(pred)
         pred_answer = get_sparql_answer(pred, kb)
         if pred_answer is None:
             pred_answer = 'no'
         is_match = whether_equal(ans[0], pred_answer)
         if is_match:
             correct += 1
-        count += 1
-    return correct / count
+    return correct / len(outputs)
 
 def whether_equal(answer, pred):
     """
@@ -112,5 +109,6 @@ def post_process(text):
     for i in range(len(chunks) - 1):
         bingo += chunks[i] + nes[i][0]
     bingo += chunks[-1]
+    bingo.replace('  ?', ' ?').replace('  .', ' .')
     return bingo
 
