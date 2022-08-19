@@ -1,10 +1,10 @@
 .vscode
 .DS_Store
 
-data*/
-data*/*
+data*/*/*
+data/utils
+!data/*/utils/
 !data/*/*.py
-!data/*/utils/*
 
 exp_*/
 *exp_*/

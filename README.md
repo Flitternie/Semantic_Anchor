@@ -14,8 +14,8 @@ torch                       1.9.0+cu111
 torchaudio                  0.9.0
 torchvision                 0.10.0+cu111
 transformers                4.16.2
-sqlite						3.31.1
-babel						2.9.1
+sqlite                      3.31.1
+babel                       2.9.1
 ```
 
 ### Datasets
