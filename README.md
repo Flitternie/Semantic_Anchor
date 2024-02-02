@@ -1,7 +1,6 @@
-# Seq2Seq PLMs with Semantic Anchors as Intermediate Supervision 
+# Neural Semantic Parsing with Semantic Anchors as Intermediate Supervision 
 
-Code for the paper **"Guiding the PLMs with Semantic Anchors as Intermediate Supervision:
-Towards Interpretable Semantic Parsing"**. 
+Code for the AAAI 2023 paper **"Unveiling the Black Box of PLMs with Semantic Anchors: Towards Interpretable Neural Semantic Parsing"**. 
 
 ## Prerequisites
 
