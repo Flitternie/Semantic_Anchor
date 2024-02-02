@@ -1,6 +1,6 @@
 # Neural Semantic Parsing with Semantic Anchors as Intermediate Supervision 
 
-Code for the AAAI 2023 paper **"Unveiling the Black Box of PLMs with Semantic Anchors: Towards Interpretable Neural Semantic Parsing"**. 
+Code for the AAAI 2023 paper [**"Unveiling the Black Box of PLMs with Semantic Anchors: Towards Interpretable Neural Semantic Parsing"**](https://ojs.aaai.org/index.php/AAAI/article/view/26572). 
 
 ## Prerequisites
 
